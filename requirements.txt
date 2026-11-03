@@ -1,0 +1,9 @@
+# Install with the same Python 3.10–3.12 interpreter used by ComfyUI.
+# PyTorch is supplied by ComfyUI and is intentionally not installed here.
+Pillow>=10.4
+numpy>=1.24,<3
+fonttools>=4.53
+regex>=2024.7.24
+opencc-python-reimplemented>=0.1.7
+rapidocr-onnxruntime==1.4.4
+onnxruntime>=1.18,<2

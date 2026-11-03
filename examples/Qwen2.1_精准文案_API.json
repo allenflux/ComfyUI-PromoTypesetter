@@ -1,0 +1,189 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_2.1_bf16.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Qwen Image 2.1 · 选择本机模型文件"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Qwen 文本及视觉编码器"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "Qwen VAE"
+    }
+  },
+  "5": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "prompt": [
+        "11",
+        2
+      ],
+      "negative_prompt": "text, typography, Chinese characters, letters, words, numbers, slogans, headlines, subtitles, captions, new watermark, new logo, promotional badge, sticker, button, signboard, advertising graphics, infographic, poster text, collage, split layout, footer panel, separator, frame, deformed product, low quality",
+      "resolution": 0,
+      "images.image_1": [
+        "11",
+        0
+      ],
+      "images.image_2": [
+        "10",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "④ Qwen 仅生成连贯主视觉底图"
+    }
+  },
+  "6": {
+    "class_type": "RepeatLatentBatch",
+    "inputs": {
+      "samples": [
+        "5",
+        2
+      ],
+      "amount": [
+        "11",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "⑤ 同一批次生成 1–4 张 · 数量来自预检节点"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "5",
+        1
+      ],
+      "latent_image": [
+        "6",
+        0
+      ],
+      "seed": 42,
+      "steps": 30,
+      "cfg": 3.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "⑥ 单个 KSampler · 一次批量采样"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "⑦ 原尺寸主视觉解码"
+    }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "请选择宣传素材.png"
+    },
+    "_meta": {
+      "title": "① 必需宣传素材 · 先上传再运行"
+    }
+  },
+  "20": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "咖啡还是我的好"
+    },
+    "_meta": {
+      "title": "② 完整指定文案 · 只在这里填写上图文字"
+    }
+  },
+  "11": {
+    "class_type": "PromoTextPrepare",
+    "inputs": {
+      "material": [
+        "10",
+        0
+      ],
+      "copy_text": [
+        "20",
+        0
+      ],
+      "language": "zh-Hans",
+      "design_prompt": "柔和自然侧光，保留素材中人物、产品、数量及品牌标识的关键特征；温暖协调的背景与构图，主体完整清晰，背景自然延伸，整张画面连贯。",
+      "style": "自动",
+      "layout": "auto",
+      "width": 1152,
+      "height": 1536,
+      "count": 1,
+      "first_line_title": true,
+      "title_size": 112,
+      "body_size": 40,
+      "font_family": "auto",
+      "text_color": "auto",
+      "allow_mixed_scripts": false
+    },
+    "_meta": {
+      "title": "③ 原文与设计预检 · 唯一数量、尺寸及风格入口"
+    }
+  },
+  "12": {
+    "class_type": "PromoRenderAndSave",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "context": [
+        "11",
+        1
+      ],
+      "filename_prefix": "PromoTypesetter",
+      "ocr_mode": "reject"
+    },
+    "_meta": {
+      "title": "⑧ OCR 校验 → 透明真实字体 → PNG 与逐图状态"
+    }
+  }
+}

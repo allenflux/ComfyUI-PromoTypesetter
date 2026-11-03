@@ -1,0 +1,32 @@
+{
+  "fonts": [
+    {
+      "filename": "NotoSansCJKsc-Regular.otf",
+      "source": "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+      "license": "SIL Open Font License 1.1",
+      "copyright": "© 2014-2021 Adobe (http://www.adobe.com/).",
+      "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
+    },
+    {
+      "filename": "NotoSansCJKtc-Regular.otf",
+      "source": "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf",
+      "license": "SIL Open Font License 1.1",
+      "copyright": "© 2014-2021 Adobe (http://www.adobe.com/).",
+      "sha256": "dce08bd4fd91aa8aa76ed8fea4b694c2dfb8550f67871e326843212ddbeb88b4"
+    },
+    {
+      "filename": "NotoSerifCJKsc-Regular.otf",
+      "source": "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf",
+      "license": "SIL Open Font License 1.1",
+      "copyright": "© 2017-2024 Adobe (http://www.adobe.com/).",
+      "sha256": "2a2eae2628df83556c54018c41e20fa532c1b862c5256ae8b3f23feb918d12ca"
+    },
+    {
+      "filename": "NotoSerifCJKtc-Regular.otf",
+      "source": "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Serif/OTF/TraditionalChinese/NotoSerifCJKtc-Regular.otf",
+      "license": "SIL Open Font License 1.1",
+      "copyright": "© 2017-2024 Adobe (http://www.adobe.com/).",
+      "sha256": "234301038e76e7c35c43113785024700c4e4fe7bdce1d1fbbc42fca7e6683798"
+    }
+  ]
+}
