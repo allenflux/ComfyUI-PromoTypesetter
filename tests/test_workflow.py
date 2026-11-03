@@ -99,7 +99,8 @@ class WorkflowContractTests(unittest.TestCase):
         for kind, contract in adapter_contracts().items():
             node = self.by_type(kind)
             # Converted widgets retain their serialized placeholder in ComfyUI.
-            widget_names = [name for name, descriptor in contract["required"].items()
+            descriptors = {**contract["required"], **contract.get("optional", {})}
+            widget_names = [name for name, descriptor in descriptors.items()
                             if descriptor[0] not in ("IMAGE", "MASK", "PROMO_CONTEXT")]
             self.assertEqual(len(widget_names), len(node["widgets_values"]))
             api_inputs = self.api[str(node["id"])]["inputs"]
@@ -113,6 +114,23 @@ class WorkflowContractTests(unittest.TestCase):
                          ["自动", "古风典雅", "现代简约", "时尚潮流", "悬疑暗调", "科技未来"])
         self.assertEqual(self.api[str(prepare["id"])]["inputs"]["width"], 1152)
         self.assertEqual(self.api[str(prepare["id"])]["inputs"]["height"], 1536)
+
+    def test_default_policy_skips_ocr_and_returns_images(self):
+        render = self.by_type("PromoRenderAndSave")
+        self.assertEqual(render["widgets_values"],
+                         ["PromoTypesetter", "off", "return_with_warnings"])
+        self.assertEqual(self.api[str(render["id"])]["inputs"]["ocr_mode"], "off")
+        required = adapter_contracts()["PromoRenderAndSave"]["required"]
+        self.assertEqual(required["ocr_mode"][0], ["off", "reject", "repair_masked"])
+        self.assertEqual(self.api[str(render["id"])]["inputs"]["quality_policy"],
+                         "return_with_warnings")
+        optional = adapter_contracts()["PromoRenderAndSave"]["optional"]
+        self.assertEqual(optional["quality_policy"][0], ["return_with_warnings", "strict"])
+        self.assertNotIn("验收成品", render["title"])
+        note = self.by_type("Note")["widgets_values"][0]
+        for term in ("ocr_mode=off", "不运行 OCR", "不需要安装 OCR 环境", "留白", "纹理", "对比度",
+                     "不再导致0张输出", "review_required", "warnings", "strict"):
+            self.assertIn(term, note)
 
     def test_api_connections_match_every_gui_link(self):
         for key, node in self.api.items():
@@ -141,7 +159,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertEqual(request[amount_source]["inputs"]["count"], count)
             self.assertEqual(sum(node["class_type"] == "KSampler" for node in request.values()), 1)
 
-    def test_debug_preview_and_result_status_are_separate_from_accepted_outputs(self):
+    def test_debug_preview_and_result_status_are_separate_from_saved_outputs(self):
         decode = self.by_type("VAEDecode")
         render = self.by_type("PromoRenderAndSave")
         raw_preview = self.by_type("PreviewImage")
@@ -158,7 +176,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(render["outputs"][0]["name"], "result_json")
         self.assertEqual(self.api[str(raw_preview["id"])]["inputs"]["images"], [str(decode["id"]), 0])
         self.assertEqual(self.api[str(status["id"])]["inputs"]["source"], [str(render["id"]), 0])
-        # Both display branches preserve the guarded final output path.
+        # Both display branches preserve the final typesetting and save path.
         self.assertEqual(self.source(render, "images"), (decode["id"], 0))
         self.assertFalse(any(node["type"] == "SaveImage" for node in self.nodes.values()))
 
@@ -171,10 +189,9 @@ class WorkflowContractTests(unittest.TestCase):
         for banned in ("ExactPromoTextPrepare", "DrawText+", "ImageCompositeMasked", '"SaveImage"',
                        "ailink.casa", "/Users/", "/app/", "Screenshot 2026", "nsfw", "nude", "色情"):
             self.assertNotIn(banned, serialized)
-        self.assertEqual(self.workflow["extra"]["promo_typesetter_version"], "0.1.2")
+        self.assertEqual(self.workflow["extra"]["promo_typesetter_version"], "0.1.3")
         note = self.by_type("Note")["widgets_values"][0]
         self.assertIn("python scripts/setup_ocr.py", note)
-        self.assertIn("已完成 CPU 排版/OCR 及结构检查", note)
         self.assertIn("实际图像仍需逐图验收", note)
         self.assertIn("Prompt executed", note)
         self.assertIn("不代表图片已验收成功", note)

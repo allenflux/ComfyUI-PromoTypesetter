@@ -389,7 +389,7 @@ def prepare(copy_text, design_prompt, font_path, width, height, count=1,
     position = {"top": "画面上方约三分之一保留连续、干净、平整的背景，主体位于下半部",
                 "left": "画面左侧约一半保留连续、干净、平整的背景，主体位于右侧",
                 "bottom": "画面下方约三分之一保留连续、干净、平整的背景，主体位于上半部"}[reserve["name"]]
-    prompt = ("以 <image2> 的人物、产品或界面为主体，在 <image1> 的尺寸内制作完整且协调的营销视觉画面，"
+    prompt = ("以 <image2> 的人物、产品或界面为主体，在 <image1> 的尺寸内制作完整、连贯的无字主视觉底图，"
               "保留主体外形、身份、数量及品牌特征。" + _STYLES[style]["direction"] + "。" + position
               + "；背景自然延伸到主体周围，整个画面连贯。视觉要求：" + design_prompt
               + "。画面仅包含实际主体、环境、材质和光影。")
@@ -435,7 +435,7 @@ def _region_score(background, plan, color_setting, palette=None):
     return score, lower_contrast, color
 
 
-def render_text_layer(context, background, protected_mask=None):
+def render_text_layer(context, background, protected_mask=None, allow_low_contrast=False):
     """Choose a safe, readable candidate and draw only original glyph pixels.
 
     No pixels outside the transparent glyph layer are supplied with an opaque
@@ -447,15 +447,21 @@ def render_text_layer(context, background, protected_mask=None):
     background = background.convert("RGB")
     protected = (_mask_array(protected_mask, context["width"], context["height"])
                  if protected_mask is not None else context.get("protected_mask"))
-    candidates = []
+    candidates, fallback_candidates = [], []
     for index, plan in enumerate(context["candidate_plans"]):
         if _overlaps_mask(plan, protected):
             continue
         texture, contrast, color = _region_score(background, plan, context["text_color"],
                                                 context["foreground_palette"])
+        # Prefer readable regions before considering an outlined fallback.
+        # Within either group, retain the reserved-region tie breaker.
+        candidate = (texture + index * .003, plan, contrast, color)
         if contrast >= 3.0:
-            # Prefer the reserved region when visual suitability is otherwise equal.
-            candidates.append((texture + index * .003, plan, contrast, color))
+            candidates.append(candidate)
+        elif allow_low_contrast:
+            fallback_candidates.append(candidate)
+    if not candidates:
+        candidates = fallback_candidates
     if not candidates:
         if all(_overlaps_mask(plan, protected) for plan in context["candidate_plans"]):
             _fail("PROTECTED_SUBJECT_OVERLAP", "所有可用文字区都与主体保护蒙版重叠。",
@@ -464,13 +470,27 @@ def render_text_layer(context, background, protected_mask=None):
               ["text_color", "layout", "background"])
     _, plan, contrast, color = min(candidates, key=lambda candidate: candidate[0])
     layer = Image.new("RGBA", background.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    for line in plan["lines"]:
-        font = context["fonts"][line["role"]]
-        bounds = font.getbbox(line["text"], anchor="lt")
-        draw.text((line["x"] - bounds[0], line["y"] - bounds[1]), line["text"],
-                  font=font, fill=(*color, 255), anchor="lt")
+    low_contrast = contrast < 3.0
+
+    def draw_lines(outline):
+        target = Image.new("RGBA", background.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(target)
+        stroke_color = (255, 255, 255) if float(_linear_luminance(color)) < .5 else (20, 20, 20)
+        for line in plan["lines"]:
+            font = context["fonts"][line["role"]]
+            bounds = font.getbbox(line["text"], anchor="lt")
+            stroke = min(3, max(1, round(font.size * .02))) if outline else 0
+            draw.text((line["x"] - bounds[0], line["y"] - bounds[1]), line["text"],
+                      font=font, fill=(*color, 255), anchor="lt", stroke_width=stroke,
+                      stroke_fill=(*stroke_color, 220))
+        return target
+
+    layer = draw_lines(low_contrast)
     alpha = np.asarray(layer)[:, :, 3]
+    if low_contrast and protected is not None and (alpha[protected] != 0).any():
+        # Keep exact glyphs and subject protection if only the optional outline overlaps.
+        layer = draw_lines(False)
+        alpha = np.asarray(layer)[:, :, 3]
     if protected is not None and (alpha[protected] != 0).any():
         _fail("PROTECTED_SUBJECT_OVERLAP", "字形像素与保护主体重叠，已停止合成。",
               ["layout", "protected_mask"])
@@ -489,6 +509,7 @@ def render_text_layer(context, background, protected_mask=None):
                 "contrast_10th_percentile": round(contrast, 3),
                 "title_lines": list(plan["title_lines"]), "body_lines": list(plan["body_lines"]),
                 "checks": {"copy": "passed", "glyph_coverage": "passed", "layout": "passed",
+                           "contrast": "review_required" if low_contrast else "passed",
                            "subject_protection": "passed" if protected is not None else "not_provided",
                            "background_incidental_text": "not_checked_by_typesetter"},
                 "visual_acceptance": "requires_review"}

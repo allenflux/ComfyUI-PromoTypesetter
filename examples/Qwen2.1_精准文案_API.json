@@ -180,10 +180,11 @@
         1
       ],
       "filename_prefix": "PromoTypesetter",
-      "ocr_mode": "reject"
+      "ocr_mode": "off",
+      "quality_policy": "return_with_warnings"
     },
     "_meta": {
-      "title": "⑧ 验收成品预览 · OCR 校验 → 真实字体 → 保存"
+      "title": "⑧ 自动排字 → 图片预览与保存"
     }
   },
   "21": {
@@ -207,7 +208,7 @@
       ]
     },
     "_meta": {
-      "title": "⑨ 逐图状态与失败原因"
+      "title": "⑨ 逐图状态、复核提醒与失败原因"
     }
   }
 }

@@ -85,6 +85,17 @@ class APIClientTests(unittest.TestCase):
                             "url": f"/view?filename=poster_{index}.png&type=output"}
                            for index in range(count)]}
 
+    @classmethod
+    def review(cls, count):
+        result = cls.success(count)
+        result.update(status="review_required", passed_count=0, review_count=count)
+        for image in result["images"]:
+            image.update(status="review_required", warnings=[{
+                "code": "BACKGROUND_TEXT_DETECTED", "message": "底图有疑似文字，图片已返回待复核。",
+                "needs_adjustment": ["检查底图"], "details": {"unexpected_count": 1},
+            }], checks={"background_incidental_text": "review_required"})
+        return result
+
     def test_counts_one_through_four_are_one_post_each(self):
         for count in range(1, 5):
             with self.subTest(count=count):
@@ -98,9 +109,63 @@ class APIClientTests(unittest.TestCase):
                 self.assertEqual(["prepare", 3], submitted["repeat"]["inputs"]["amount"])
                 self.assertEqual(42, submitted["sample"]["inputs"]["seed"])
                 self.assertEqual("input/product.png", submitted["source"]["inputs"]["image"])
+                self.assertEqual("return_with_warnings", submitted["render"]["inputs"]["quality_policy"])
+                self.assertEqual("off", submitted["render"]["inputs"]["ocr_mode"])
                 self.assertEqual(count, len(result["images"]))
                 self.assertTrue(all(image["url"].startswith("https://comfy.example.test/view?")
                                     for image in result["images"]))
+
+    def test_review_images_warnings_and_counts_are_returned_without_resubmission(self):
+        for count in range(1, 5):
+            with self.subTest(count=count):
+                payload = self.review(count)
+                http = StubHTTP(self.completed(payload))
+                result = self.run_request(http, count=count)
+                self.assertEqual("review_required", result["status"])
+                self.assertEqual(count, result["success_count"])
+                self.assertEqual(count, result["review_count"])
+                self.assertEqual(0, result["passed_count"])
+                self.assertEqual(0, result["failed_count"])
+                self.assertEqual(1, len(http.posts))
+                for original, returned in zip(payload["images"], result["images"]):
+                    self.assertEqual(original["warnings"], returned["warnings"])
+                    self.assertEqual(original["checks"], returned["checks"])
+                    self.assertEqual("review_required", returned["status"])
+                    self.assertTrue(returned["url"].startswith("https://comfy.example.test/view?"))
+
+    def test_explicit_strict_policy_is_sent_to_render_node(self):
+        http = StubHTTP(self.completed(self.success(1)))
+        result = self.run_request(http, quality_policy="strict")
+        self.assertEqual("success", result["status"])
+        submitted = json.loads(http.posts[0][2])["prompt"]
+        self.assertEqual("strict", submitted["render"]["inputs"]["quality_policy"])
+        self.assertEqual("off", submitted["render"]["inputs"]["ocr_mode"])
+        self.assertEqual(1, len(http.posts))
+
+    def test_default_off_overrides_legacy_template_and_explicit_ocr_is_preserved(self):
+        self.prompt["render"]["inputs"]["ocr_mode"] = "reject"
+        self.workflow.write_text(json.dumps(self.prompt), encoding="utf-8")
+        for supplied, expected in (({}, "off"), ({"ocr_mode": "reject"}, "reject"),
+                                   ({"ocr_mode": "repair_masked"}, "repair_masked")):
+            with self.subTest(mode=expected):
+                http = StubHTTP(self.completed(self.success(1)))
+                result = self.run_request(http, **supplied)
+                self.assertEqual("success", result["status"])
+                submitted = json.loads(http.posts[0][2])["prompt"]
+                self.assertEqual(expected, submitted["render"]["inputs"]["ocr_mode"])
+                self.assertEqual(1, len(http.posts))
+
+    def test_invalid_ocr_mode_is_rejected_without_submitting(self):
+        http = StubHTTP()
+        result = self.run_request(http, ocr_mode="auto_accept")
+        self.assertEqual("INVALID_OCR_MODE", result["error"]["code"])
+        self.assertEqual([], http.calls)
+
+    def test_invalid_quality_policy_is_rejected_without_submitting(self):
+        http = StubHTTP()
+        result = self.run_request(http, quality_policy="silently_pass")
+        self.assertEqual("INVALID_QUALITY_POLICY", result["error"]["code"])
+        self.assertEqual([], http.calls)
 
     def test_utf8_copy_file_and_post_keep_crlf_and_mixed_scripts(self):
         original = "優惠 Offer\r\n咖啡 Coffee 50%\r\n"
@@ -201,7 +266,38 @@ class APIClientTests(unittest.TestCase):
         self.assertEqual(0, status)
         self.assertEqual(original, generate.call_args.kwargs["copy_text"])
         self.assertEqual(2, generate.call_args.kwargs["count"])
+        self.assertEqual("return_with_warnings", generate.call_args.kwargs["quality_policy"])
+        self.assertEqual("off", generate.call_args.kwargs["ocr_mode"])
         self.assertEqual(json.loads(stdout.getvalue()), json.loads(output.read_text(encoding="utf-8")))
+
+    def test_cli_returned_review_images_are_successful_delivery_without_hiding_warnings(self):
+        copy_path = Path(self.temp.name) / "copy.txt"
+        copy_path.write_text("原样文案", encoding="utf-8")
+        payload = self.review(2)
+        stdout = io.StringIO()
+        with mock.patch.object(client, "request_generation", return_value=payload) as generate:
+            with contextlib.redirect_stdout(stdout):
+                status = client.main(["--base-url", "https://example.test", "--material", "uploaded.png",
+                                      "--copy-file", str(copy_path), "--count", "2"])
+        self.assertEqual(0, status)
+        self.assertEqual(payload, json.loads(stdout.getvalue()))
+        self.assertEqual("return_with_warnings", generate.call_args.kwargs["quality_policy"])
+
+    def test_cli_strict_option_is_forwarded_and_real_partial_failure_still_exits_one(self):
+        copy_path = Path(self.temp.name) / "copy.txt"
+        copy_path.write_text("原样文案", encoding="utf-8")
+        payload = self.review(2)
+        payload.update(status="partial_success", success_count=1, failed_count=1, review_count=1)
+        payload["images"][1] = {"index": 1, "status": "failed", "url": None,
+                                "error": {"code": "OUTPUT_FAILED", "message": "保存失败"}}
+        with mock.patch.object(client, "request_generation", return_value=payload) as generate:
+            with contextlib.redirect_stdout(io.StringIO()):
+                status = client.main(["--base-url", "https://example.test", "--material", "uploaded.png",
+                                      "--copy-file", str(copy_path), "--count", "2", "--quality-policy", "strict",
+                                      "--ocr-mode", "reject"])
+        self.assertEqual(1, status)
+        self.assertEqual("strict", generate.call_args.kwargs["quality_policy"])
+        self.assertEqual("reject", generate.call_args.kwargs["ocr_mode"])
 
 
 if __name__ == "__main__":

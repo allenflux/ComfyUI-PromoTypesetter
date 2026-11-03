@@ -19,6 +19,8 @@ from urllib import error, parse, request
 
 DEFAULT_WORKFLOW = Path(__file__).resolve().parents[1] / "examples" / "Qwen2.1_精准文案_API.json"
 STYLES = ["自动", "古风典雅", "现代简约", "时尚潮流", "悬疑暗调", "科技未来"]
+QUALITY_POLICIES = ["return_with_warnings", "strict"]
+OCR_MODES = ["off", "reject", "repair_masked"]
 
 
 class ClientError(Exception):
@@ -75,7 +77,14 @@ def _one_node(prompt, class_type):
 
 
 def build_prompt(workflow_path, *, material, copy_text, language, allow_mixed_scripts,
-                 style, layout, width, height, count, seed):
+                 style, layout, width, height, count, seed,
+                 quality_policy="return_with_warnings", ocr_mode="off"):
+    if quality_policy not in QUALITY_POLICIES:
+        raise ClientError("INVALID_QUALITY_POLICY", "quality-policy 须为 return_with_warnings 或 strict。",
+                          ["quality-policy"])
+    if ocr_mode not in OCR_MODES:
+        raise ClientError("INVALID_OCR_MODE", "ocr-mode 须为 off、reject 或 repair_masked。",
+                          ["ocr-mode"])
     try:
         with open(workflow_path, encoding="utf-8") as handle:
             prompt = json.load(handle)
@@ -86,7 +95,8 @@ def build_prompt(workflow_path, *, material, copy_text, language, allow_mixed_sc
         raise ClientError("INVALID_WORKFLOW", "需要 ComfyUI API 格式的节点字典，不能使用界面工作流文件。", ["workflow"])
     prompt = copy.deepcopy(prompt)
     prepare_id, prepare = _one_node(prompt, "PromoTextPrepare")
-    render_id, _ = _one_node(prompt, "PromoRenderAndSave")
+    render_id, render = _one_node(prompt, "PromoRenderAndSave")
+    render.setdefault("inputs", {}).update(quality_policy=quality_policy, ocr_mode=ocr_mode)
     inputs = prepare.setdefault("inputs", {})
     material_link = inputs.get("material")
     if not (isinstance(material_link, list) and len(material_link) == 2
@@ -126,7 +136,8 @@ def build_prompt(workflow_path, *, material, copy_text, language, allow_mixed_sc
 def failure_result(exc, count, copy_text, language, prompt_id=None):
     reason = exc.as_dict()
     payload = {"schema_version": "0.1.0", "status": "failed", "requested_count": count,
-               "success_count": 0, "failed_count": count, "copy_text": copy_text,
+               "success_count": 0, "passed_count": 0, "review_count": 0,
+               "failed_count": count, "copy_text": copy_text,
                "language": language, "error": reason,
                "images": [{"index": index, "status": "failed", "url": None,
                            "copy_text": copy_text, "language": language, "error": reason}
@@ -245,6 +256,7 @@ def _extract_result(record, render_id, base_url):
 def request_generation(*, base_url, material, copy_text, language="zh-Hans",
                        allow_mixed_scripts=False, style="自动", layout="auto",
                        width=1152, height=1536, count=1, seed=0, timeout=600,
+                       quality_policy="return_with_warnings", ocr_mode="off",
                        workflow_path=DEFAULT_WORKFLOW, opener=None,
                        clock=time.monotonic, sleeper=time.sleep, poll_interval=0.5):
     """Return a result dict; at most one POST is made for the entire batch."""
@@ -258,7 +270,8 @@ def request_generation(*, base_url, material, copy_text, language="zh-Hans",
         prompt, render_id = build_prompt(workflow_path, material=material, copy_text=copy_text,
                                          language=language, allow_mixed_scripts=allow_mixed_scripts,
                                          style=style, layout=layout, width=width, height=height,
-                                         count=count, seed=seed)
+                                         count=count, seed=seed, quality_policy=quality_policy,
+                                         ocr_mode=ocr_mode)
         opener = opener or request.urlopen
         deadline = clock() + timeout
         queue = _http_json(opener, parse.urljoin(base_url, "prompt"), deadline, clock, {"prompt": prompt})
@@ -299,6 +312,10 @@ def main(argv=None):
     parser.add_argument("--allow-mixed-scripts", action="store_true")
     parser.add_argument("--style", choices=STYLES, default="自动")
     parser.add_argument("--layout", choices=["auto", "top", "left", "bottom"], default="auto")
+    parser.add_argument("--quality-policy", choices=QUALITY_POLICIES, default="return_with_warnings",
+                        help="默认返回图片并保留校验提醒；strict 按校验结果拒收")
+    parser.add_argument("--ocr-mode", choices=OCR_MODES, default="off",
+                        help="默认 off：无字底图直接由真实字体排版；其余模式显式启用 OCR")
     parser.add_argument("--width", type=int, default=1152)
     parser.add_argument("--height", type=int, default=1536)
     parser.add_argument("--count", type=int, choices=range(1, 5), default=1)
@@ -314,7 +331,8 @@ def main(argv=None):
         result = request_generation(base_url=args.base_url, material=args.material, copy_text=copy_text,
                                     language=args.language, allow_mixed_scripts=args.allow_mixed_scripts,
                                     style=args.style, layout=args.layout, width=args.width,
-                                    height=args.height, count=args.count, seed=args.seed, timeout=args.timeout)
+                                    height=args.height, count=args.count, seed=args.seed, timeout=args.timeout,
+                                    quality_policy=args.quality_policy, ocr_mode=args.ocr_mode)
     encoded = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         try:
@@ -327,7 +345,10 @@ def main(argv=None):
                       "generation_result": result}
             encoded = json.dumps(result, ensure_ascii=False, indent=2)
     print(encoded)
-    return 0 if result.get("status") == "success" else 1
+    images_returned_for_review = (result.get("status") == "review_required"
+                                 and result.get("success_count", 0) > 0
+                                 and result.get("failed_count") == 0)
+    return 0 if result.get("status") == "success" or images_returned_for_review else 1
 
 
 if __name__ == "__main__":

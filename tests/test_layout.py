@@ -145,6 +145,19 @@ class TransparentLayoutTests(unittest.TestCase):
         self.error("INVALID_BACKGROUND_SIZE", lambda: layout.render_text_layer(
             self.make(), Image.new("RGB", (100, 100))))
 
+    def test_readable_region_takes_priority_over_low_contrast_fallback(self):
+        context = self.make(width=1024, height=1024, title_size=72,
+                            body_size=28, text_color="#777777")
+        background = Image.new("RGB", (1024, 1024), "white")
+        background.paste("#777777", (0, 0, 1024, 351))
+        # The preferred top region is flat but matches the text color. A clear
+        # bottom region must be used before adding an outline to the top.
+        layer, manifest = layout.render_text_layer(context, background, allow_low_contrast=True)
+        self.assertEqual(manifest["layout"], "bottom")
+        self.assertEqual(manifest["checks"]["contrast"], "passed")
+        self.assertGreaterEqual(manifest["contrast_10th_percentile"], 3.0)
+        self.assertEqual(int(np.asarray(layer)[:351, :, 3].max()), 0)
+
     def test_style_conflict_and_copy_in_visual_instructions(self):
         self.error("STYLE_CONFLICT", lambda: self.make(style="现代简约", design_prompt="采用科技未来风格"))
         self.error("COPY_IN_DESIGN_PROMPT", lambda: self.make(design_prompt='写上“另外的标题”'))

@@ -130,12 +130,14 @@ class PromoTextPrepare:
         context["version"] = "0.1.0"
         context["copy_sha256"] = hashlib.sha256(copy_text.encode("utf-8")).hexdigest()
         context["prompt"] += (" 不生成任何标题、正文、字母、数字、标语、按钮文案、标签或伪文字。"
+                              "本阶段只生成无字底图，完整指定文案由后续真实字体程序绘制。"
+                              "预留区域保持自然连贯的干净背景，不画文字占位符，不把提示词写到画面上。"
                               "素材中原有品牌标识保持原样，不新增标识。")
         canvas = torch.from_numpy(np.asarray(context["generation_canvas"]).copy()).float().div(255).unsqueeze(0)
         return canvas, context, context["prompt"], count
 
 
-def _failure(index, context, exc):
+def _error_record(exc):
     if isinstance(exc, (PromoError, OCRGuardError)):
         error = {"code": exc.code, "message": exc.message,
                  "needs_adjustment": exc.needs_adjustment}
@@ -144,9 +146,14 @@ def _failure(index, context, exc):
     else:
         error = {"code": "OUTPUT_FAILED", "message": "该张图片处理或保存失败。",
                  "needs_adjustment": ["查看ComfyUI后端日志及输出目录权限"], "error_type": type(exc).__name__}
-    return {"index": index, "status": "failed", "url": None, "width": context["width"],
+    return error
+
+
+def _failure(index, context, exc):
+    return {"index": index, "status": "failed", "generation_status": "failed",
+            "validation_status": "failed", "warnings": [], "url": None, "width": context["width"],
             "height": context["height"], "format": "png", "copy_text": context["copy_text"],
-            "language": context["language"], "error": error}
+            "language": context["language"], "error": _error_record(exc)}
 
 
 class PromoRenderAndSave:
@@ -156,24 +163,28 @@ class PromoRenderAndSave:
         return {"required": {
             "images": ("IMAGE",), "context": ("PROMO_CONTEXT",),
             "filename_prefix": ("STRING", {"default": "PromoTypesetter"}),
-            "ocr_mode": (["reject", "repair_masked"],),
+            "ocr_mode": (["off", "reject", "repair_masked"],),
         }, "optional": {"allowed_text_mask": ("MASK", {"tooltip": "允许保留的素材原有品牌文字区域，不应覆盖新增乱码"}),
-                        "cleanup_mask": ("MASK", {"tooltip": "仅repair_masked模式使用；不可覆盖主体或品牌"})}}
+                        "cleanup_mask": ("MASK", {"tooltip": "仅repair_masked模式使用；不可覆盖主体或品牌"}),
+                        "quality_policy": (["return_with_warnings", "strict"],
+                                           {"tooltip": "默认照常出图，OCR只返回复核提醒；strict才拦截未通过校验的图片"})}}
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("result_json",)
     FUNCTION = "run"
     CATEGORY = "Promo Typesetter"
     OUTPUT_NODE = True
-    DESCRIPTION = "底图OCR→透明真实字体合成→PNG及逐图状态。后面不再经过图像生成模型。"
+    DESCRIPTION = "无字底图→自动选区→真实字体排字→PNG与预览。默认不运行OCR，直接返回图片。"
 
-    def run(self, images, context, filename_prefix="PromoTypesetter", ocr_mode="reject",
-            allowed_text_mask=None, cleanup_mask=None):
+    def run(self, images, context, filename_prefix="PromoTypesetter", ocr_mode="off",
+            quality_policy="return_with_warnings", allowed_text_mask=None, cleanup_mask=None):
         from urllib.parse import urlencode
         import folder_paths
 
         if not isinstance(context, dict) or context.get("version") != "0.1.0":
             _error("INVALID_CONTEXT", "请连接本插件的PromoTextPrepare节点。", ["context"])
+        if quality_policy not in ("return_with_warnings", "strict"):
+            _error("INVALID_QUALITY_POLICY", "请选择 return_with_warnings 或 strict。", ["quality_policy"])
         width, height, count = context["width"], context["height"], context["count"]
         results, previews = [], []
         batch_ok = (isinstance(images, torch.Tensor) and images.ndim == 4
@@ -192,6 +203,7 @@ class PromoRenderAndSave:
             for index in range(count):
                 path = None
                 try:
+                    warnings = []
                     if not safe_prefix:
                         _error("INVALID_FILENAME", "保存前缀只能为输出目录内的名称或子目录，不能使用绝对路径或..。", ["filename_prefix"])
                     frame = images[index].detach().cpu().numpy()
@@ -200,13 +212,36 @@ class PromoRenderAndSave:
                     background = Image.fromarray(np.round(frame[:, :, :3] * 255).astype(np.uint8), "RGB")
                     allowed = _mask(allowed_text_mask, width, height, "allowed_text_mask", index, count)
                     cleanup = _mask(cleanup_mask, width, height, "cleanup_mask", index, count)
-                    background, ocr = inspect_background(background, allowed_text_mask=allowed,
-                                                         cleanup_mask=cleanup, protected_mask=context.get("protected_mask"),
-                                                         mode=ocr_mode)
-                    layer, manifest = render_text_layer(context, background)
+                    if ocr_mode == "off":
+                        ocr = {"status": "not_run", "mode": "off"}
+                    else:
+                        try:
+                            checked, ocr = inspect_background(background, allowed_text_mask=allowed,
+                                                              cleanup_mask=cleanup, protected_mask=context.get("protected_mask"),
+                                                              mode=ocr_mode)
+                            background = checked
+                        except OCRGuardError as exc:
+                            if quality_policy == "strict":
+                                raise
+                            warning = _error_record(exc)
+                            warnings.append(warning)
+                            # Optional OCR never destroys a generated frame in the
+                            # return-with-warnings policy. Keep its original pixels.
+                            ocr = {**exc.details, "status": "review_required", "error": warning}
+                            logging.getLogger(__name__).warning(
+                                "Promo image %d: %s; returning image for review", index, exc.code)
+                    layer, manifest = render_text_layer(
+                        context, background, allow_low_contrast=quality_policy != "strict")
+                    if manifest["checks"].get("contrast") == "review_required":
+                        warnings.append({"code": "LOW_TEXT_CONTRAST", "message": "文字区域背景较复杂，已保留原文并返回图片，请复核可读性。",
+                                         "needs_adjustment": ["text_color", "layout", "design_prompt"], "details": {}})
                     output = Image.alpha_composite(background.convert("RGBA"), layer).convert("RGB")
-                    manifest["checks"]["background_incidental_text"] = "passed_detection"
+                    manifest["checks"]["background_incidental_text"] = (
+                        "not_checked" if ocr_mode == "off" else
+                        "review_required" if ocr.get("status") == "review_required" else "passed_detection")
                     manifest["ocr"] = ocr
+                    manifest["warnings"] = warnings
+                    manifest["quality_policy"] = quality_policy
                     manifest["copy_sha256"] = context["copy_sha256"]
                     manifest["image_generation"] = "qwen_external_native_workflow"
                     manifest["checks"]["identity_and_design"] = "requires_visual_review"
@@ -232,7 +267,10 @@ class PromoRenderAndSave:
                         path.unlink(missing_ok=True)
                         raise
                     file_info = {"filename": leaf, "subfolder": subfolder, "type": "output"}
-                    result = {"index": index, "status": "success", "url": "/view?" + urlencode(file_info),
+                    item_status = "review_required" if warnings else "success"
+                    result = {"index": index, "status": item_status, "generation_status": "success",
+                              "validation_status": "review_required" if warnings else "passed",
+                              "warnings": warnings, "url": "/view?" + urlencode(file_info),
                               "width": width, "height": height, "format": "png",
                               "copy_text": context["copy_text"], "language": context["language"],
                               "copy_sha256": context["copy_sha256"], "file": file_info,
@@ -243,9 +281,14 @@ class PromoRenderAndSave:
                     if not isinstance(exc, (PromoError, OCRGuardError)):
                         logging.getLogger(__name__).exception("Promo image %d processing failed", index)
                     results.append(_failure(index, context, exc))
-        success = sum(item["status"] == "success" for item in results)
-        payload = {"schema_version": "0.1.0", "status": "success" if success == count else "partial_success" if success else "failed",
-                   "requested_count": count, "success_count": success, "failed_count": count - success,
+        passed = sum(item["status"] == "success" for item in results)
+        review = sum(item["status"] == "review_required" for item in results)
+        success = passed + review
+        overall = ("partial_success" if success and success < count else "failed" if not success
+                   else "review_required" if review else "success")
+        payload = {"schema_version": "0.1.0", "status": overall,
+                   "requested_count": count, "success_count": success, "produced_count": success,
+                   "passed_count": passed, "review_count": review, "failed_count": count - success,
                    "copy_text": context["copy_text"], "language": context["language"], "images": results,
                    "visual_acceptance": "requires_review"}
         encoded = json.dumps(payload, ensure_ascii=False)

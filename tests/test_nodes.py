@@ -100,7 +100,7 @@ class NodeIntegrationTests(unittest.TestCase):
                 self.assertNotIn(context["copy_text"], prompt)
                 batch = torch.full((count, 1024, 1024, 3), .94)
                 with mock.patch.object(nodes, "inspect_background", side_effect=passed_ocr) as guard:
-                    result, previews = self.render(batch, context, filename_prefix=f"count_{count}")
+                    result, previews = self.render(batch, context, ocr_mode="reject", filename_prefix=f"count_{count}")
                 self.assertEqual(guard.call_count, count)
                 self.assertEqual(result["status"], "success")
                 self.assertEqual(result["success_count"], count)
@@ -111,6 +111,30 @@ class NodeIntegrationTests(unittest.TestCase):
                     self.assertTrue(self.image_path(item).is_file())
                     self.assertEqual(item["copy_text"], context["copy_text"])
                     self.assertEqual((item["width"], item["height"], item["format"]), (1024, 1024, "png"))
+
+    def test_default_ocr_off_returns_four_font_images_without_a_detector_or_runtime(self):
+        _, context, _, _ = self.prepare(count=4)
+        batch = torch.full((4, 1024, 1024, 3), .94)
+        unavailable = nodes.OCRGuardError("OCR_RUNTIME_MISSING", "not installed", ["setup OCR"])
+        with mock.patch.object(nodes, "inspect_background", side_effect=unavailable) as guard:
+            result, previews = self.render(batch, context)
+        guard.assert_not_called()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual((result["success_count"], result["passed_count"], result["review_count"],
+                          result["failed_count"]), (4, 4, 0, 0))
+        self.assertEqual(len(previews), 4)
+        self.assertEqual(len(list(self.output_dir.rglob("*.png"))), 4)
+        for item in result["images"]:
+            self.assertEqual(item["status"], "success")
+            self.assertEqual(item["warnings"], [])
+            self.assertIsNone(item["error"])
+            with Image.open(self.image_path(item)) as image:
+                manifest = json.loads(image.info["promo"])
+                self.assertEqual(manifest["copy_text"], "咖啡还是我的好")
+                self.assertEqual(manifest["font_rendering"], "real_font_glyphs")
+                self.assertEqual(manifest["ocr"], {"status": "not_run", "mode": "off"})
+                self.assertEqual(manifest["checks"]["background_incidental_text"], "not_checked")
+                self.assertLess(np.asarray(image).min(), 240)
 
     def test_partial_success_preserves_one_result_per_frame_and_error_details(self):
         _, context, _, _ = self.prepare(count=4)
@@ -127,7 +151,7 @@ class NodeIntegrationTests(unittest.TestCase):
             return passed_ocr(image, **kwargs)
 
         with mock.patch.object(nodes, "inspect_background", side_effect=guard):
-            result, previews = self.render(batch, context)
+            result, previews = self.render(batch, context, ocr_mode="reject", quality_policy="strict")
         self.assertEqual(result["status"], "partial_success")
         self.assertEqual((result["requested_count"], result["success_count"], result["failed_count"]), (4, 3, 1))
         self.assertEqual([item["status"] for item in result["images"]], ["success", "failed", "success", "success"])
@@ -137,6 +161,101 @@ class NodeIntegrationTests(unittest.TestCase):
         self.assertEqual(failed["error"]["details"]["unexpected_count"], 1)
         self.assertEqual(len(list(self.output_dir.rglob("*.png"))), 3)
         self.assertEqual(len(previews), 3)
+
+    def test_default_returns_all_four_images_when_ocr_requires_review(self):
+        _, context, _, _ = self.prepare(count=4)
+        batch = torch.full((4, 1024, 1024, 3), .94)
+        codes = ("BACKGROUND_TEXT_DETECTED", "OCR_UNAVAILABLE", "OCR_RUNTIME_MISSING", "OCR_WORKER_TIMEOUT")
+        failures = [nodes.OCRGuardError(code, "manual review needed", ["review the image"],
+                    {"unexpected_count": 1, "frame": index}) for index, code in enumerate(codes)]
+        with mock.patch.object(nodes, "inspect_background", side_effect=failures) as guard:
+            result, previews = self.render(batch, context, ocr_mode="reject")
+        self.assertEqual(guard.call_count, 4)
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual((result["requested_count"], result["success_count"], result["passed_count"],
+                          result["review_count"], result["failed_count"]), (4, 4, 0, 4, 0))
+        self.assertEqual(len(previews), 4)
+        self.assertEqual(len(list(self.output_dir.rglob("*.png"))), 4)
+        for index, item in enumerate(result["images"]):
+            self.assertEqual(item["status"], "review_required")
+            self.assertEqual(item["generation_status"], "success")
+            self.assertEqual(item["validation_status"], "review_required")
+            self.assertIsNone(item["error"])
+            self.assertEqual(item["warnings"][0]["code"], codes[index])
+            self.assertEqual(item["warnings"][0]["details"]["frame"], index)
+            self.assertTrue(item["url"])
+            with Image.open(self.image_path(item)) as image:
+                manifest = json.loads(image.info["promo"])
+                self.assertEqual(manifest["copy_text"], context["copy_text"])
+                self.assertEqual(manifest["font_rendering"], "real_font_glyphs")
+                self.assertEqual(manifest["checks"]["background_incidental_text"], "review_required")
+                self.assertEqual(manifest["ocr"]["status"], "review_required")
+                self.assertEqual(manifest["ocr"]["error"]["code"], codes[index])
+                # A warning retains the actual generated scene, while the exact
+                # caller copy is still drawn as a font layer in the reserved region.
+                self.assertEqual(image.getpixel((1023, 1023)), (240, 240, 240))
+                self.assertLess(np.asarray(image).min(), 240)
+
+    def test_default_mixed_pass_and_review_counts_both_as_generated_images(self):
+        _, context, _, _ = self.prepare(count=2)
+        batch = torch.full((2, 1024, 1024, 3), .94)
+        seen = []
+
+        def guard(image, **kwargs):
+            seen.append(image)
+            if len(seen) == 2:
+                raise nodes.OCRGuardError("BACKGROUND_TEXT_DETECTED", "possible texture", ["review"],
+                                         {"unexpected_count": 1})
+            return passed_ocr(image, **kwargs)
+
+        with mock.patch.object(nodes, "inspect_background", side_effect=guard):
+            result, previews = self.render(batch, context, ocr_mode="reject")
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual((result["success_count"], result["passed_count"], result["review_count"],
+                          result["failed_count"]), (2, 1, 1, 0))
+        self.assertEqual([item["status"] for item in result["images"]], ["success", "review_required"])
+        self.assertEqual(len(previews), 2)
+        self.assertTrue(all(self.image_path(item).is_file() for item in result["images"]))
+
+    def test_review_image_save_failure_remains_a_real_failure(self):
+        _, context, _, _ = self.prepare()
+        batch = torch.full((1, 1024, 1024, 3), .94)
+        warning = nodes.OCRGuardError("OCR_UNAVAILABLE", "not checked", ["review"])
+        with mock.patch.object(nodes, "inspect_background", side_effect=warning):
+            with mock.patch.object(Image.Image, "save", side_effect=OSError("disk full")):
+                with self.assertLogs(nodes.__name__, level="ERROR"):
+                    result, previews = self.render(batch, context, ocr_mode="reject")
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["success_count"], 0)
+        self.assertIsNone(result["images"][0]["url"])
+        self.assertEqual(result["images"][0]["error"]["code"], "OUTPUT_FAILED")
+        self.assertEqual(previews, [])
+        self.assertEqual(list(self.output_dir.rglob("*.png")), [])
+
+    def test_low_contrast_background_still_returns_exact_font_image_for_review(self):
+        _, context, _, _ = self.prepare(text_color="#777777")
+        batch = torch.full((1, 1024, 1024, 3), 119 / 255)
+        with mock.patch.object(nodes, "inspect_background", side_effect=passed_ocr):
+            result, previews = self.render(batch, context, ocr_mode="reject")
+            strict, strict_previews = self.render(batch, context, ocr_mode="reject", quality_policy="strict")
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual((result["success_count"], result["review_count"], result["failed_count"]), (1, 1, 0))
+        self.assertEqual(len(previews), 1)
+        item = result["images"][0]
+        self.assertIn("LOW_TEXT_CONTRAST", [warning["code"] for warning in item["warnings"]])
+        with Image.open(self.image_path(item)) as image:
+            manifest = json.loads(image.info["promo"])
+            self.assertEqual(manifest["copy_text"], "咖啡还是我的好")
+            self.assertEqual(manifest["checks"]["contrast"], "review_required")
+            self.assertEqual(manifest["checks"]["background_incidental_text"], "passed_detection")
+            self.assertEqual(image.getpixel((1023, 1023)), (119, 119, 119))
+            # The outline keeps actual font pixels visible instead of silently
+            # returning a blank, same-colored text layer.
+            self.assertGreater(np.asarray(image).max(), 119)
+        self.assertEqual(strict["status"], "failed")
+        self.assertEqual(strict["images"][0]["error"]["code"], "LOW_TEXT_CONTRAST")
+        self.assertEqual(strict_previews, [])
+        self.assertEqual(len(list(self.output_dir.rglob("*.png"))), 1)
 
     def test_batch_or_dimensions_mismatch_saves_nothing_and_skips_ocr(self):
         _, context, _, _ = self.prepare(count=3)
@@ -222,15 +341,15 @@ class NodeIntegrationTests(unittest.TestCase):
         good = torch.full((1, 1024, 1024, 3), .94)
         unavailable = nodes.OCRGuardError("OCR_UNAVAILABLE", "models unavailable", ["restore models"])
         with mock.patch.object(nodes, "inspect_background", side_effect=unavailable):
-            result, _ = self.render(good, context)
+            result, _ = self.render(good, context, ocr_mode="reject", quality_policy="strict")
         self.assertEqual(result["images"][0]["error"]["code"], "OCR_UNAVAILABLE")
         with mock.patch.object(nodes, "inspect_background") as guard:
             for prefix in ("../escape", "/tmp/escape"):
-                result, _ = self.render(good, context, filename_prefix=prefix)
+                result, _ = self.render(good, context, ocr_mode="reject", filename_prefix=prefix)
                 self.assertEqual(result["images"][0]["error"]["code"], "INVALID_FILENAME")
             bad = good.clone()
             bad[0, 0, 0, 0] = float("nan")
-            result, _ = self.render(bad, context)
+            result, _ = self.render(bad, context, ocr_mode="reject")
             self.assertEqual(result["images"][0]["error"]["code"], "INVALID_GENERATED_IMAGE")
             guard.assert_not_called()
         self.assertEqual(list(self.output_dir.rglob("*.png")), [])
@@ -242,7 +361,7 @@ class NodeIntegrationTests(unittest.TestCase):
         allowed[0, 10:20, 30:40] = 1
         allowed[1, 50:70, 80:90] = 1
         with mock.patch.object(nodes, "inspect_background", side_effect=passed_ocr) as guard:
-            result, _ = self.render(batch, context, allowed_text_mask=allowed)
+            result, _ = self.render(batch, context, ocr_mode="reject", allowed_text_mask=allowed)
         self.assertEqual(result["success_count"], 2)
         first = guard.call_args_list[0].kwargs["allowed_text_mask"]
         second = guard.call_args_list[1].kwargs["allowed_text_mask"]
@@ -266,7 +385,7 @@ class NodeIntegrationTests(unittest.TestCase):
         batch = torch.stack([frame] * 4)
         # No detector patch: bundled ONNX CPU detection, Pillow glyph rendering,
         # PNG files and their metadata all run through this single render call.
-        result, previews = self.render(batch, context, filename_prefix="real_cpu")
+        result, previews = self.render(batch, context, ocr_mode="reject", filename_prefix="real_cpu")
         self.assertEqual(result["status"], "success", json.dumps(result, ensure_ascii=False))
         self.assertEqual(result["success_count"], 4)
         self.assertEqual(len(previews), 4)
@@ -277,11 +396,11 @@ class NodeIntegrationTests(unittest.TestCase):
                 self.assertEqual(json.loads(output.info["promo"])["copy_text"], "咖啡还是我的好")
 
     @unittest.skipUnless(HAS_OCR_RUNTIME, "Run scripts/setup_ocr.py for real isolated OCR end-to-end")
-    def test_detector_flagged_graphic_shape_is_not_silently_treated_as_success(self):
+    def test_detector_flagged_graphic_shape_is_returned_for_review_and_strict_can_reject(self):
         _, context, _, _ = self.prepare()
         # This hard-edged synthetic cup has a small ambiguous detector region.
-        # A false positive is reviewable failure, never a bypass based on a
-        # recognizer saying that the region is unreadable.
+        # The strict policy may reject it, while the default now preserves the
+        # generated image and exact font layer with a truthful review warning.
         image = Image.new("RGB", (1024, 1024), "#f7edda")
         draw = ImageDraw.Draw(image)
         draw.ellipse((320, 710, 880, 930), fill="#c6ac8c")
@@ -289,7 +408,7 @@ class NodeIntegrationTests(unittest.TestCase):
         draw.ellipse((415, 450, 760, 600), fill="#d4b08b", outline="#ead9be", width=10)
         draw.ellipse((440, 475, 735, 575), fill="#65402b")
         batch = torch.from_numpy(np.asarray(image).copy()).float().div(255).unsqueeze(0)
-        result, previews = self.render(batch, context)
+        result, previews = self.render(batch, context, ocr_mode="reject", quality_policy="strict")
         self.assertEqual(result["status"], "failed")
         error = result["images"][0]["error"]
         self.assertEqual(error["code"], "BACKGROUND_TEXT_DETECTED")
@@ -297,6 +416,24 @@ class NodeIntegrationTests(unittest.TestCase):
         self.assertEqual(error["details"]["status"], "rejected")
         self.assertEqual(previews, [])
         self.assertEqual(list(self.output_dir.rglob("*.png")), [])
+        result, previews = self.render(batch, context, ocr_mode="reject")
+        self.assertEqual(result["status"], "review_required")
+        self.assertEqual(result["success_count"], 1)
+        self.assertEqual(result["passed_count"], 0)
+        self.assertEqual(result["review_count"], 1)
+        self.assertEqual(len(previews), 1)
+        item = result["images"][0]
+        self.assertEqual(item["warnings"][0]["code"], "BACKGROUND_TEXT_DETECTED")
+        self.assertEqual(item["copy_text"], "咖啡还是我的好")
+        self.assertTrue(self.image_path(item).is_file())
+        with mock.patch.object(nodes, "inspect_background", side_effect=AssertionError("OCR must stay off")) as guard:
+            uninspected, uninspected_previews = self.render(batch, context)
+        guard.assert_not_called()
+        self.assertEqual(uninspected["status"], "success")
+        self.assertEqual(uninspected["success_count"], 1)
+        self.assertEqual(uninspected["review_count"], 0)
+        self.assertEqual(len(uninspected_previews), 1)
+        self.assertEqual(uninspected["images"][0]["typography"]["checks"]["background_incidental_text"], "not_checked")
 
 
 if __name__ == "__main__":
