@@ -48,6 +48,18 @@ git clone https://github.com/allenflux/ComfyUI-PromoTypesetter.git
 
 启动后应能找到 `PromoTextPrepare` 和 `PromoRenderAndSave` 节点。原工作流中的 `ExactPromoTextPrepare` 是旧节点名称；请导入本包示例或替换为本包节点。
 
+### 已安装时出现 OpenCV 版本冲突
+
+0.1.1 起固定 `opencv-python==4.12.0.88`，避免 OCR 的间接依赖选择 OpenCV 5，与已有 `lada` 等节点要求冲突。若早期安装已升级到 OpenCV 5，使用运行 ComfyUI 的同一个 Python 修复：
+
+```bash
+python -m pip install "opencv-python==4.12.0.88"
+python -m pip check
+python -c "import cv2, numpy; from rapidocr_onnxruntime import RapidOCR; print('OpenCV:', cv2.__version__, 'NumPy:', numpy.__version__)"
+```
+
+该 OpenCV 在本包支持的 Python 版本上要求 NumPy `>=2,<2.3`；pip 会同时解析所需 NumPy 版本。`pip check` 如仍报告其他冲突，需要按实际输出检查，不能把安装完成视作整个容器依赖均已兼容。修复后重启 ComfyUI。
+
 ## 接入 Qwen 工作流
 
 1. 将真实宣传主体素材连接到 `PromoTextPrepare.material`。可再连接 `material_2`–`material_5`，并在设计要求中说明各素材用于主体、Logo 或参考。风格参考图不能替代必需的宣传主体素材；节点检查图片可读取性，不声称能自动判定图片的业务角色。

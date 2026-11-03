@@ -411,7 +411,9 @@ def prepare(copy_text, design_prompt, font_path, width, height, count=1,
 def _linear_luminance(rgb):
     values = np.asarray(rgb, dtype=np.float64) / 255.0
     values = np.where(values <= .04045, values / 12.92, ((values + .055) / 1.055) ** 2.4)
-    return values @ np.array([.2126, .7152, .0722])
+    # RGB weights are elementwise: avoid platform-specific BLAS warnings in
+    # NumPy 2.2 while calculating bounded color luminance.
+    return values[..., 0] * .2126 + values[..., 1] * .7152 + values[..., 2] * .0722
 
 
 def _region_score(background, plan, color_setting, palette=None):

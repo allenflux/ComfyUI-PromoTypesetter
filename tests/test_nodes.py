@@ -51,9 +51,19 @@ class NodeIntegrationTests(unittest.TestCase):
             return str(directory), prefix_path.name, 1, subfolder, prefix
 
         folder_paths.get_save_image_path = get_save_image_path
-        self.folder_patch = mock.patch.dict(sys.modules, {"folder_paths": folder_paths})
-        self.folder_patch.start()
-        self.addCleanup(self.folder_patch.stop)
+        # Restore only our ComfyUI stub. Restoring the whole sys.modules mapping
+        # unloads cv2/ONNX modules imported by a test and breaks later C-extension imports.
+        missing = object()
+        previous = sys.modules.get("folder_paths", missing)
+        sys.modules["folder_paths"] = folder_paths
+
+        def restore_folder_paths():
+            if previous is missing:
+                sys.modules.pop("folder_paths", None)
+            else:
+                sys.modules["folder_paths"] = previous
+
+        self.addCleanup(restore_folder_paths)
         self.material = torch.full((1, 128, 160, 3), .6)
 
     def prepare(self, text="咖啡还是我的好", **kwargs):

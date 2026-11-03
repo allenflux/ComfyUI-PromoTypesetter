@@ -16,6 +16,16 @@ if not FONT.is_file():
 
 
 class TransparentLayoutTests(unittest.TestCase):
+    def test_contrast_luminance_is_finite_and_matches_reference_colors(self):
+        colors = np.array([[0, 0, 0], [255, 255, 255], [255, 0, 0],
+                           [0, 255, 0], [0, 0, 255]], dtype=np.uint8)
+        with np.errstate(all="raise"):
+            actual = layout._linear_luminance(colors)
+            raster = layout._linear_luminance(np.tile(colors, (32, 32, 1)))
+        np.testing.assert_allclose(actual, [0, 1, .2126, .7152, .0722], atol=1e-12)
+        self.assertTrue(np.isfinite(raster).all())
+        self.assertTrue(((raster >= 0) & (raster <= 1)).all())
+
     def make(self, text="咖啡还是我的好", **kwargs):
         return layout.prepare(text, kwargs.pop("design_prompt", "柔和自然光，产品位于下半部。"),
                               kwargs.pop("font_path", FONT), kwargs.pop("width", 1088),
