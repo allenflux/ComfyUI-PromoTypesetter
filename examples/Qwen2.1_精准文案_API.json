@@ -183,7 +183,31 @@
       "ocr_mode": "reject"
     },
     "_meta": {
-      "title": "⑧ OCR 校验 → 透明真实字体 → PNG 与逐图状态"
+      "title": "⑧ 验收成品预览 · OCR 校验 → 真实字体 → 保存"
+    }
+  },
+  "21": {
+    "class_type": "PreviewImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "⑦A 未校验底图预览 · 仅供排查，不是验收成品"
+    }
+  },
+  "22": {
+    "class_type": "PreviewAny",
+    "inputs": {
+      "source": [
+        "12",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "⑨ 逐图状态与失败原因"
     }
   }
 }

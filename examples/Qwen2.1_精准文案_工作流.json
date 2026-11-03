@@ -1,8 +1,8 @@
 {
   "id": "e9b5dd5a-1bb0-4233-bee5-677f2ffbde4c",
   "revision": 0,
-  "last_node_id": 20,
-  "last_link_id": 17,
+  "last_node_id": 22,
+  "last_link_id": 19,
   "nodes": [
     {
       "id": 1,
@@ -530,7 +530,8 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            17
+            17,
+            18
           ]
         }
       ],
@@ -542,9 +543,47 @@
       }
     },
     {
+      "id": 21,
+      "type": "PreviewImage",
+      "title": "⑦A 未校验底图预览 · 仅供排查，不是验收成品",
+      "pos": [
+        2010,
+        760
+      ],
+      "size": [
+        500,
+        560
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.37.4"
+      },
+      "widgets_values": [],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
       "id": 12,
       "type": "PromoRenderAndSave",
-      "title": "⑧ OCR 校验 → 透明真实字体 → PNG 与逐图状态",
+      "title": "⑧ 验收成品预览 · OCR 校验 → 真实字体 → 保存",
       "pos": [
         2010,
         40
@@ -554,7 +593,7 @@
         640
       ],
       "flags": {},
-      "order": 10,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -584,7 +623,9 @@
         {
           "name": "result_json",
           "type": "STRING",
-          "links": []
+          "links": [
+            19
+          ]
         }
       ],
       "properties": {
@@ -599,27 +640,65 @@
       "bgcolor": "#3b5d43"
     },
     {
+      "id": 22,
+      "type": "PreviewAny",
+      "title": "⑨ 逐图状态与失败原因",
+      "pos": [
+        2600,
+        40
+      ],
+      "size": [
+        650,
+        960
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 19
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAny",
+        "cnr_id": "comfy-core",
+        "ver": "0.37.4"
+      },
+      "widgets_values": [],
+      "color": "#263f2c",
+      "bgcolor": "#3b5d43"
+    },
+    {
       "id": 19,
       "type": "Note",
       "pos": [
-        1580,
-        740
+        440,
+        1420
       ],
       "size": [
-        930,
+        2810,
         360
       ],
       "flags": {},
-      "order": 11,
+      "order": 13,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "使用前阅读 · 短文案、批量及验证边界",
+      "title": "使用前阅读 · 独立 OCR、底图预览与验收状态",
       "properties": {
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "本模板需先安装本仓库自定义节点及 requirements.txt，并在左侧三个加载器选择已安装的 Qwen 2.1 模型。请阅读 README。\n① 必须上传可读取的真实宣传素材；占位文件故意不存在。不能转为纯文生图。\n② 只填写调用方完整原文。示例是7字短标题；文案不会发送给 Qwen，不会自动补写、删减、简繁转换或翻译。长文放不下会要求调整，不能自动缩写。\n③ 风格可选自动、古风典雅、现代简约、时尚潮流、悬疑暗调、科技未来；默认1152×1536。数量只改③ count，支持1、2、3、4张，连接至同一个批量采样器。\n⑧ 默认 OCR reject：底图出现额外文字或乱码会逐图拒收；主体及原有品牌保护蒙版、允许品牌文字区域需按 README 手动提供。仅短标题已做真实字体及图结构测试，主体一致性、设计和OCR漏检仍需目视验收。\n本公开模板尚未完成实际 GPU 生成验证。最终字体合成后没有任何生成模型，不追加底栏。输出含成功数量、PNG地址、原文及逐图错误。\n高级多素材：可手动添加至多5张素材，同时连接③对应 material 槽和原生Qwen编码器 image2–image6，避免只连其中一侧。"
+        "本模板需安装本仓库 requirements.txt，并执行 python scripts/setup_ocr.py 创建独立 OCR 环境；完成后原地重载 ComfyUI。模型加载器选择本机 Qwen 2.1 文件，详情见 README。\n① 必须上传可读取的真实宣传素材；占位文件故意不存在。不能转为纯文生图。\n② 只填写调用方完整原文。示例是7字短标题；文案不会发送给 Qwen，不会自动补写、删减、简繁转换或翻译。全文放不下会要求调整，不能自动缩写。\n③ 风格可选自动、古风典雅、现代简约、时尚潮流、悬疑暗调、科技未来；默认1152×1536。数量只改③ count，支持1、2、3、4张，连接至同一个批量采样器。\n⑦A 只显示 Qwen 未校验底图，可能仍有伪文字或主体问题；仅供排查，不是验收成品。⑧ 只有通过检查并排字保存的图片才会显示为成品。\n⑨ 显示每张的 status、success_count、失败 code、原因和 needs_adjustment。日志中的 Prompt executed 只代表流程结束，不代表图片已验收成功；无成品时请看⑨。\n⑧ 默认 OCR reject：底图出现额外文字或乱码会逐图拒收；主体及原有品牌保护蒙版、允许品牌文字区域需按 README 手动提供。已完成 CPU 排版/OCR 及结构检查，实际图像仍需逐图验收。最终字体合成后没有生成模型，不追加底栏。\n高级多素材：可手动添加至多5张素材，同时连接③对应 material 槽和原生Qwen编码器 image2–image6，避免只连其中一侧。按 . 可适应整个画布。"
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -761,19 +840,35 @@
       12,
       0,
       "IMAGE"
+    ],
+    [
+      18,
+      8,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      19,
+      12,
+      0,
+      22,
+      0,
+      "STRING"
     ]
   ],
   "groups": [],
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.5,
+      "scale": 0.35,
       "offset": [
         20,
         40
       ]
     },
-    "promo_typesetter_version": "0.1.0"
+    "promo_typesetter_version": "0.1.2"
   },
   "version": 0.4
 }

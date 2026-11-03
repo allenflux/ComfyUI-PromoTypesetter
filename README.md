@@ -75,6 +75,8 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
 4. 将准备节点的 `count` 输出连接到 `RepeatLatentBatch.amount`（先把 `amount` 转为输入），从同一个数量来源设置采样批量；同一批只执行一次 KSampler。将解码后的整批图片连接到 `PromoRenderAndSave.images`。
 5. 将准备节点的 `context` 连接到排版节点的 `context`，执行一次工作流。排版节点直接保存成功 PNG，返回 `result_json` 并显示成功图预览，无需另接 Save Image。每张 PNG 内嵌排版清单，不另外生成 JSON 文件。
 
+示例还带有两个原生预览节点：`PreviewImage` 显示解码后的**未校验底图**，`PreviewAny` 显示最终 `result_json`，包含逐图状态和失败原因。底图预览不代表验收通过；只有排字输出节点的成功图片才是成品。日志出现 `Prompt executed` 只说明工作流执行完成，若全部图片被 OCR 或排版校验拒收，成功数量仍为 0，成品预览为空。添加这两个原生节点不需要重启后端。
+
 指定文案不应再次拼入 Qwen 提示词。排版完成的图片直接保存，不再经过 Qwen 或扩散采样，否则字形仍可能被重画。
 
 ### 输入范围

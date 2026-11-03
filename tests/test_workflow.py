@@ -55,7 +55,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertEqual(out_socket["links"].count(link_id), 1)
             self.assertEqual(in_socket["link"], link_id)
             self.assertEqual(out_socket["type"], kind)
-            self.assertEqual(in_socket["type"], kind)
+            self.assertIn(in_socket["type"], (kind, "*"))
         for node in self.nodes.values():
             for slot, socket in enumerate(node.get("outputs", [])):
                 for link_id in socket.get("links", []):
@@ -141,19 +141,43 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertEqual(request[amount_source]["inputs"]["count"], count)
             self.assertEqual(sum(node["class_type"] == "KSampler" for node in request.values()), 1)
 
+    def test_debug_preview_and_result_status_are_separate_from_accepted_outputs(self):
+        decode = self.by_type("VAEDecode")
+        render = self.by_type("PromoRenderAndSave")
+        raw_preview = self.by_type("PreviewImage")
+        status = self.by_type("PreviewAny")
+        self.assertEqual(self.source(raw_preview, "images"), (decode["id"], 0))
+        self.assertIn("未校验底图", raw_preview["title"])
+        self.assertIn("不是验收成品", raw_preview["title"])
+        self.assertEqual(self.source(status, "source"), (render["id"], 0))
+        self.assertEqual(status["inputs"][0]["type"], "*")
+        self.assertIn("逐图状态", status["title"])
+        self.assertIn("失败原因", status["title"])
+        self.assertEqual(raw_preview["widgets_values"], [])
+        self.assertEqual(status["widgets_values"], [])
+        self.assertEqual(render["outputs"][0]["name"], "result_json")
+        self.assertEqual(self.api[str(raw_preview["id"])]["inputs"]["images"], [str(decode["id"]), 0])
+        self.assertEqual(self.api[str(status["id"])]["inputs"]["source"], [str(render["id"]), 0])
+        # Both display branches preserve the guarded final output path.
+        self.assertEqual(self.source(render, "images"), (decode["id"], 0))
+        self.assertFalse(any(node["type"] == "SaveImage" for node in self.nodes.values()))
+
     def test_public_template_contains_no_old_plugins_or_private_inputs(self):
         allowed = {"UNETLoader", "CLIPLoader", "VAELoader", "LoadImage", "PrimitiveStringMultiline",
                    "PromoTextPrepare", "TextEncodeQwenImage21", "RepeatLatentBatch", "KSampler",
-                   "VAEDecode", "PromoRenderAndSave", "Note"}
+                   "VAEDecode", "PromoRenderAndSave", "PreviewImage", "PreviewAny", "Note"}
         self.assertEqual({node["type"] for node in self.nodes.values()}, allowed)
         serialized = WORKFLOW.read_text() + API.read_text()
         for banned in ("ExactPromoTextPrepare", "DrawText+", "ImageCompositeMasked", '"SaveImage"',
                        "ailink.casa", "/Users/", "/app/", "Screenshot 2026", "nsfw", "nude", "色情"):
             self.assertNotIn(banned, serialized)
-        self.assertEqual(self.workflow["extra"]["promo_typesetter_version"], "0.1.0")
+        self.assertEqual(self.workflow["extra"]["promo_typesetter_version"], "0.1.2")
         note = self.by_type("Note")["widgets_values"][0]
-        self.assertIn("尚未完成实际 GPU 生成验证", note)
-        self.assertIn("短标题", note)
+        self.assertIn("python scripts/setup_ocr.py", note)
+        self.assertIn("已完成 CPU 排版/OCR 及结构检查", note)
+        self.assertIn("实际图像仍需逐图验收", note)
+        self.assertIn("Prompt executed", note)
+        self.assertIn("不代表图片已验收成功", note)
         self.assertIn("README", note)
 
 
