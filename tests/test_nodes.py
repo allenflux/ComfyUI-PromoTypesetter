@@ -26,8 +26,8 @@ SPEC = importlib.util.spec_from_file_location(
 nodes = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = nodes
 SPEC.loader.exec_module(nodes)
-HAS_RAPIDOCR = importlib.util.find_spec("rapidocr_onnxruntime") is not None
-HAS_CV2 = importlib.util.find_spec("cv2") is not None
+HAS_OCR_RUNTIME = ((ROOT / ".venv-ocr" / "bin" / "python").is_file()
+                   or (ROOT / ".venv-ocr" / "Scripts" / "python.exe").is_file())
 
 
 def passed_ocr(image, **kwargs):
@@ -251,7 +251,7 @@ class NodeIntegrationTests(unittest.TestCase):
         self.assertTrue(second[50, 80])
         self.assertFalse(second[10, 30])
 
-    @unittest.skipUnless(HAS_RAPIDOCR and HAS_CV2, "Install requirements for real CPU OCR end-to-end")
+    @unittest.skipUnless(HAS_OCR_RUNTIME, "Run scripts/setup_ocr.py for real isolated OCR end-to-end")
     def test_real_cpu_ocr_and_font_render_process_four_images_in_one_call(self):
         _, context, _, _ = self.prepare(count=4)
         image = Image.new("RGB", (1024, 1024), "#f7edda")
@@ -276,7 +276,7 @@ class NodeIntegrationTests(unittest.TestCase):
             with Image.open(self.image_path(item)) as output:
                 self.assertEqual(json.loads(output.info["promo"])["copy_text"], "咖啡还是我的好")
 
-    @unittest.skipUnless(HAS_RAPIDOCR and HAS_CV2, "Install requirements for real CPU OCR end-to-end")
+    @unittest.skipUnless(HAS_OCR_RUNTIME, "Run scripts/setup_ocr.py for real isolated OCR end-to-end")
     def test_detector_flagged_graphic_shape_is_not_silently_treated_as_success(self):
         _, context, _, _ = self.prepare()
         # This hard-edged synthetic cup has a small ambiguous detector region.

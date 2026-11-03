@@ -24,12 +24,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ocr.txt
       - name: Install runtime dependencies
         run: python -m pip install -r requirements.txt
       - name: Install CPU PyTorch for tests outside ComfyUI
         run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Check OCR dependency is importable
-        run: python -c "from rapidocr_onnxruntime import RapidOCR; import onnxruntime"
+      - name: Set up private OCR runtime
+        run: python scripts/setup_ocr.py
       - name: Run unit and OCR integration tests
         run: python -m unittest discover -s tests -v
+      - name: Test OCR engine inside its own environment
+        run: .venv-ocr/bin/python -m unittest discover -s tests -p test_ocr.py -v

@@ -5,7 +5,4 @@ numpy>=1.24,<3
 fonttools>=4.53
 regex>=2024.7.24
 opencc-python-reimplemented>=0.1.7
-rapidocr-onnxruntime==1.4.4
-# Match the existing cloud ComfyUI/lada environment; avoid resolving to OpenCV 5.
-opencv-python==4.12.0.88
-onnxruntime>=1.18,<2
+# OCR/OpenCV are installed only in .venv-ocr by scripts/setup_ocr.py.

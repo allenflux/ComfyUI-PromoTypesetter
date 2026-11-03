@@ -1,10 +1,32 @@
 # 验证记录
 
-2026-11-03，0.1.1，Python 3.12.11，CPU PyTorch，RapidOCR 1.4.4 / ONNX Runtime CPU，OpenCV 4.12.0.88 / NumPy 2.2.6。
+## 0.1.2：独立 OCR 运行时
 
-完整测试：**62 项通过，0 失败，0 跳过**。其中私有错字图片回归通过环境变量提供，图片未收入仓库；普通 CI 不提供该图片时只跳过这一项。隔离测试环境依赖检查通过；不代表已检查调用方整个容器。
+2026-11-03，已在 Python 3.12.11、固定 `PIP_CONSTRAINT` 为 NumPy 2.3.5 的本地主环境中实际安装和验证。
 
-0.1.1 固定 OpenCV 4.12.0.88，避免间接依赖选用 OpenCV 5 与既有节点冲突；并使用逐通道运算计算文字对比度，避免 NumPy 2.2 下的矩阵运算警告。新增参考颜色亮度回归，修正测试桩清理全局模块导致 C 扩展重复导入的问题。
+主环境测试集共 82 项：**75 项通过，7 项本地 OCR 引擎测试在私有环境单独运行**。私有环境运行 `test_ocr.py` 的 14 项测试全部通过，包含上述 7 项及私有错字图片回归。真实单次四张排字、OCR 子进程和安装器测试均已运行；没有将跳过项冒充主环境通过。
+
+私有环境实际版本：NumPy 2.2.6、OpenCV 4.12.0.88、RapidOCR 1.4.4、ONNX Runtime 1.31.1 CPU。主环境保持 NumPy 2.3.5，未安装 OpenCV、RapidOCR 或 ONNX Runtime；安装前后全部主环境包名及版本快照一致。
+
+主环境仅安装 `requirements.txt` 中的字体、图片、排版和语言依赖。`python scripts/setup_ocr.py` 使用 Python 3.10–3.12 创建插件内的 `.venv-ocr`，在该环境安装 `requirements-ocr.txt`；只对私有安装子进程停用继承的 pip 约束。合成文字前由私有 CPU 工作进程完成底图文字检查，API 接口与文案排版流程保持一致。
+
+| 本版本检查 | 状态 |
+| --- | --- |
+| 平台固定 `PIP_CONSTRAINT` 为 NumPy 2.3.5 时，私有 OCR 依赖可独立解析和安装 | 实际安装、自检、依赖解析通过 |
+| 安装及 OCR 执行不替换宿主 NumPy、OpenCV 或 PyTorch，不修改主环境约束 | 安装前后包快照相同；执行后 NumPy 版本及主环境包快照相同 |
+| 私有 CPU 工作进程实际检测文字，之后才合成和保存指定文案 | 单次四张合成、PNG 与原文元数据通过；宿主未导入 cv2/ONNX/RapidOCR |
+| 缺少运行时返回 `OCR_RUNTIME_MISSING`；运行时存在但失败时明确报错，无静默回退或跳过检测 | 缺失、超时、协议错误、文字拒收、尺寸异常等回归通过 |
+| 原文、语言、字体、遮罩、批量与 API 客户端回归 | 主进程及私有进程中分别通过 |
+
+OCR 隔离不自动修复早期安装已经造成的宿主 `lada` / OpenCV 冲突；本记录不声称调用方容器的 `pip check` 已全部通过。当前没有 Python 3.13 支持结论。
+
+## 0.1.1：历史验证基线
+
+2026-11-03，Python 3.12.11，CPU PyTorch，RapidOCR 1.4.4 / ONNX Runtime CPU，OpenCV 4.12.0.88 / NumPy 2.2.6。
+
+当时完整测试：**62 项通过，0 失败，0 跳过**。其中私有错字图片回归通过环境变量提供，图片未收入仓库；普通 CI 不提供该图片时只跳过这一项。当时隔离测试环境的依赖检查通过，不代表调用方整个容器已通过，也不是 0.1.2 私有 OCR 架构的验证结果。
+
+0.1.1 曾在主环境固定 OpenCV 4.12.0.88，其 NumPy 要求与平台固定的 NumPy 2.3.5 不兼容。0.1.2 改用私有 OCR 环境，不再推荐通过全局降级 NumPy 或替换宿主 OpenCV 解决本节点安装。0.1.1 同时改用逐通道文字对比度计算，新增参考颜色亮度回归，并修正测试桩清理全局模块导致 C 扩展重复导入的问题。
 
 | 范围 | 验证内容 |
 | --- | --- |
@@ -18,13 +40,16 @@
 | 修复 | 仅显式安全蒙版内允许修复，不能侵入主体保护区，修复后重新检测 |
 | 安装素材 | 四份 Noto CJK Sans/Serif SC/TC 完整字体、SIL OFL 许可、来源及 SHA-256 随包提供 |
 
-这些是 CPU 实际运行和工作流结构检查。**尚未在目标 H200 上完成本版本 Qwen 生成及前端导入验证**，不能据此声称所有 GPU、显存、ComfyUI 版本及画面风格已通过验收。人物、产品、Logo 保真度仍由底图生成模型和素材质量决定，需要检查实际结果。
+上述历史表格记录 CPU 实际运行和工作流结构检查。**尚未在目标 H200 上完成 0.1.2 Qwen 生成及前端导入验证**，不能据此声称所有 GPU、显存、ComfyUI 版本及画面风格已通过验收。人物、产品、Logo 保真度仍由底图生成模型和素材质量决定，需要检查实际结果。
 
 OCR 是文字区域检测器，可能误检或漏检。测试中特意保留了把图形误检成文字的例子：其结果为明确失败，不会绕过检查。允许区域蒙版只应标记需要保留的原有品牌文字，不能作为新增乱码的放行手段。
 
 运行：
 
 ```bash
+python -m pip install -r requirements.txt
+python scripts/setup_ocr.py
 python -m unittest discover -s tests -v
-# 可选：PROMO_BAD_POSTER=/path/to/private-example.png python -m unittest discover -s tests -v
+.venv-ocr/bin/python -m unittest discover -s tests -p test_ocr.py -v
+# 可选：PROMO_BAD_POSTER=/path/to/private-example.png .venv-ocr/bin/python -m unittest discover -s tests -p test_ocr.py -v
 ```

@@ -1,0 +1,7 @@
+# Install only inside the plugin-private .venv-ocr via scripts/setup_ocr.py.
+# These packages are deliberately excluded from the ComfyUI host requirements.
+Pillow>=10.4
+numpy>=2,<2.3
+rapidocr-onnxruntime==1.4.4
+opencv-python==4.12.0.88
+onnxruntime>=1.18,<2

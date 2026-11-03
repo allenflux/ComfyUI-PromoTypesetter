@@ -19,17 +19,19 @@
 
 ## 安装
 
-需要 ComfyUI 使用 **Python 3.10–3.12**。当前固定的 RapidOCR 依赖不支持 Python 3.13。PyTorch 使用 ComfyUI 已安装的版本，安装本节点不会通过依赖文件重新安装 PyTorch。
+0.1.2 使用**独立 OCR 虚拟环境**：ComfyUI 主进程负责字体和排版，私有 CPU 工作进程在合成文字前检查底图。需要使用 **Python 3.10–3.12**，当前不支持 Python 3.13。
+
+主环境的 `requirements.txt` 只安装字体、图片、排版和语言校验依赖，不包含 RapidOCR、OpenCV 或 ONNX Runtime，也不重新安装 PyTorch。OCR 依赖安装到插件目录下的 `.venv-ocr`，不要求降低宿主 NumPy，也不替换宿主 OpenCV 或 PyTorch。
 
 ### ComfyUI Manager
 
-在允许 Git URL 安装的 Manager 中选择 **Install via Git URL**，粘贴以下仓库地址，完成安装并重启 ComfyUI：
+在允许 Git URL 安装的 Manager 中选择 **Install via Git URL**，粘贴以下仓库地址：
 
 ```text
 https://github.com/allenflux/ComfyUI-PromoTypesetter.git
 ```
 
-Git URL 安装不要求先发布到 Comfy Registry。字体随仓库安装，无需另外复制字体。
+Git URL 安装不要求先发布到 Comfy Registry。字体随仓库安装，无需另外复制字体。安装文件后，仍需按下方步骤创建私有 OCR 环境，再重启 ComfyUI。
 
 ### 从目录或 Git 安装
 
@@ -40,25 +42,30 @@ cd /path/to/ComfyUI/custom_nodes
 git clone https://github.com/allenflux/ComfyUI-PromoTypesetter.git
 ```
 
-使用**运行 ComfyUI 的同一个 Python**安装依赖，然后重启 ComfyUI：
+已有安装先更新文件：
 
 ```bash
-/path/to/comfyui-python -m pip install -r /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter/requirements.txt
+cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
+git pull --ff-only
 ```
 
-启动后应能找到 `PromoTextPrepare` 和 `PromoRenderAndSave` 节点。原工作流中的 `ExactPromoTextPrepare` 是旧节点名称；请导入本包示例或替换为本包节点。
-
-### 已安装时出现 OpenCV 版本冲突
-
-0.1.1 起固定 `opencv-python==4.12.0.88`，避免 OCR 的间接依赖选择 OpenCV 5，与已有 `lada` 等节点要求冲突。若早期安装已升级到 OpenCV 5，使用运行 ComfyUI 的同一个 Python 修复：
+在插件目录内，使用**运行 ComfyUI 的同一个 Python 3.10–3.12**安装主进程依赖并建立 OCR 环境：
 
 ```bash
-python -m pip install "opencv-python==4.12.0.88"
-python -m pip check
-python -c "import cv2, numpy; from rapidocr_onnxruntime import RapidOCR; print('OpenCV:', cv2.__version__, 'NumPy:', numpy.__version__)"
+cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
+/path/to/comfyui-python -m pip install -r requirements.txt
+/path/to/comfyui-python scripts/setup_ocr.py
 ```
 
-该 OpenCV 在本包支持的 Python 版本上要求 NumPy `>=2,<2.3`；pip 会同时解析所需 NumPy 版本。`pip check` 如仍报告其他冲突，需要按实际输出检查，不能把安装完成视作整个容器依赖均已兼容。修复后重启 ComfyUI。
+`setup_ocr.py` 在 `.venv-ocr` 内安装 `requirements-ocr.txt`。它仅在私有虚拟环境的安装子进程中停用继承的 pip 约束，避免平台的 `PIP_CONSTRAINT`（例如固定 NumPy 2.3.5）干扰 OCR 依赖解析；不修改主环境的约束文件或全局环境变量。
+
+完成后**重启 ComfyUI**。启动后应能找到 `PromoTextPrepare` 和 `PromoRenderAndSave` 节点。原工作流中的 `ExactPromoTextPrepare` 是旧节点名称；请导入本包示例或替换为本包节点。
+
+### OCR 环境与旧版本依赖
+
+若返回 `OCR_RUNTIME_MISSING`，在插件目录执行 `python scripts/setup_ocr.py`（使用上述 ComfyUI Python），完成后重启。私有 OCR 运行时存在但启动或检测失败时会明确报错，不静默改用宿主 OCR，也不跳过底图检测后保存成功图片。
+
+0.1.1 曾将 OpenCV 4.12 与所需 NumPy 版本放入主环境，在平台固定 NumPy 2.3.5 时会发生安装冲突；0.1.2 将这些 OCR 依赖移入私有环境。早期安装已经造成的宿主 `lada` / OpenCV 等冲突仍需按该环境的实际情况处理，OCR 隔离不会自动修复它们，也不代表宿主 `pip check` 已全部通过。
 
 ## 接入 Qwen 工作流
 
@@ -178,10 +185,11 @@ python scripts/call_api.py \
 
 ```bash
 python -m pip install -r requirements.txt
+python scripts/setup_ocr.py
 python -m unittest discover -s tests -v
 ```
 
-在 ComfyUI 外测试时还需安装兼容当前 Python 的 PyTorch。CI 使用 CPU PyTorch，安装完整 OCR 依赖后运行测试。测试包括文案保留、简繁英文混排、字体覆盖、区域溢出、批量状态及真实 OCR 检测；不会通过自动删减文案或重复执行单张生成来适配测试。
+在 ComfyUI 外测试时还需安装兼容当前 Python 的 PyTorch。完整 OCR 回归需先建立私有 OCR 环境。测试覆盖文案保留、简繁英文混排、字体覆盖、区域溢出、批量状态及真实 OCR 检测；0.1.2 新增运行时隔离检查的实际结果见验证记录，不沿用旧版本通过数量作为本版本结论。
 
 仓库中的 `pyproject.toml` 提供节点包名称和版本。若另行发布到 Comfy Registry，需要填写实际注册的 Publisher ID；本包不预填未经验证的发布者身份。
 

@@ -58,7 +58,7 @@ def _unavailable(exc: Exception) -> OCRGuardError:
         "OCR_UNAVAILABLE",
         "背景文字检测不可用，不能将未检查的图片标记为成功。",
         [
-            "安装本插件 requirements.txt 中的依赖，并确认 RapidOCR 随包的本地 ONNX 模型可读取。",
+            "运行 python scripts/setup_ocr.py 配置独立 OCR 环境，并确认本地 ONNX 模型可读取。",
             "修复检测器后重新运行；不要跳过背景文字检测。",
         ],
         {"cause": f"{type(exc).__name__}: {exc}"},
@@ -205,7 +205,7 @@ def _classify_regions(
     return regions, unwanted
 
 
-def inspect_background(
+def _inspect_background_local(
     image: Image.Image,
     allowed_text_mask: Any = None,
     cleanup_mask: Any = None,
@@ -326,3 +326,17 @@ def inspect_background(
         )
     checks["status"] = "repaired"
     return repaired, checks
+
+
+def inspect_background(image, allowed_text_mask=None, cleanup_mask=None,
+                       protected_mask=None, mode="reject"):
+    """Inspect in the private interpreter without importing host cv2/ONNX.
+
+    The worker calls ``_inspect_background_local``. A missing or failed private
+    runtime is an explicit error; there is no host-library fallback.
+    """
+    from .ocr_process import inspect_isolated
+
+    return inspect_isolated(image, allowed_text_mask=allowed_text_mask,
+                            cleanup_mask=cleanup_mask, protected_mask=protected_mask,
+                            mode=mode)

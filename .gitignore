@@ -17,3 +17,4 @@ dist/
 !.env.example
 output/
 test-output/
+.venv-ocr/

@@ -47,7 +47,7 @@ class BackgroundGuardPolicyTests(unittest.TestCase):
         fake_engine = mock.Mock(return_value=([BOX], [0.015]))
         with mock.patch.object(ocr, "_get_engine", return_value=fake_engine):
             error = self.assert_error(
-                "BACKGROUND_TEXT_DETECTED", lambda: ocr.inspect_background(self.image)
+                "BACKGROUND_TEXT_DETECTED", lambda: ocr._inspect_background_local(self.image)
             )
         self.assertEqual(error.details["unexpected_count"], 1)
         self.assertEqual(error.details["status"], "rejected")
@@ -58,30 +58,30 @@ class BackgroundGuardPolicyTests(unittest.TestCase):
 
     def test_engine_dependency_and_runtime_failure_never_report_success(self):
         with mock.patch.object(ocr, "_get_engine", side_effect=RuntimeError("missing ONNX model")):
-            error = self.assert_error("OCR_UNAVAILABLE", lambda: ocr.inspect_background(self.image))
+            error = self.assert_error("OCR_UNAVAILABLE", lambda: ocr._inspect_background_local(self.image))
             self.assertIn("missing ONNX model", error.details["cause"])
         with mock.patch.object(ocr, "_get_engine", return_value=mock.Mock(side_effect=RuntimeError("inference failed"))):
-            self.assert_error("OCR_UNAVAILABLE", lambda: ocr.inspect_background(self.image))
+            self.assert_error("OCR_UNAVAILABLE", lambda: ocr._inspect_background_local(self.image))
 
     def test_bad_or_recognition_shaped_engine_result_is_not_empty_success(self):
         for result in ([[BOX, "unreadable", 0.01]], [[[float("nan"), 2]] * 4], [[[1, 1]] * 4]):
             with self.subTest(result=result):
                 engine = mock.Mock(return_value=(result, [0.01]))
                 with mock.patch.object(ocr, "_get_engine", return_value=engine):
-                    self.assert_error("OCR_UNAVAILABLE", lambda: ocr.inspect_background(self.image))
+                    self.assert_error("OCR_UNAVAILABLE", lambda: ocr._inspect_background_local(self.image))
 
     def test_explicit_brand_allowance_requires_entire_polygon(self):
         allowed = np.zeros((120, 200), dtype=bool)
         allowed[19:42, 19:92] = True
         with mock.patch.object(ocr, "_detect_regions", return_value=([BOX], [0.01])):
-            output, checks = ocr.inspect_background(self.image, allowed_text_mask=allowed)
+            output, checks = ocr._inspect_background_local(self.image, allowed_text_mask=allowed)
             self.assertEqual(checks["allowed_count"], 1)
             self.assertEqual(checks["unexpected_count"], 0)
             self.assertEqual(output.tobytes(), self.image.tobytes())
             allowed[30, 50] = False  # Test a hole, not just polygon corners.
             self.assert_error(
                 "BACKGROUND_TEXT_DETECTED",
-                lambda: ocr.inspect_background(self.image, allowed_text_mask=allowed),
+                lambda: ocr._inspect_background_local(self.image, allowed_text_mask=allowed),
             )
 
     def test_mask_shape_nan_range_and_mode_fail_before_inference(self):
@@ -91,16 +91,16 @@ class BackgroundGuardPolicyTests(unittest.TestCase):
             for mask in masks:
                 with self.subTest(mask_type=type(mask).__name__):
                     self.assert_error(
-                        "INVALID_OCR_MASK", lambda: ocr.inspect_background(self.image, cleanup_mask=mask)
+                        "INVALID_OCR_MASK", lambda: ocr._inspect_background_local(self.image, cleanup_mask=mask)
                     )
-            self.assert_error("INVALID_OCR_MODE", lambda: ocr.inspect_background(self.image, mode="off"))
-            self.assert_error("IMAGE_UNREADABLE", lambda: ocr.inspect_background(None))
+            self.assert_error("INVALID_OCR_MODE", lambda: ocr._inspect_background_local(self.image, mode="off"))
+            self.assert_error("IMAGE_UNREADABLE", lambda: ocr._inspect_background_local(None))
             detect.assert_not_called()
 
     def test_unprovided_cleanup_mask_never_erases_letters(self):
         with mock.patch.object(ocr, "_detect_regions", return_value=([BOX], [0.01])):
             error = self.assert_error(
-                "UNSAFE_TEXT_REPAIR", lambda: ocr.inspect_background(self.image, mode="repair_masked")
+                "UNSAFE_TEXT_REPAIR", lambda: ocr._inspect_background_local(self.image, mode="repair_masked")
             )
             self.assertEqual(error.details["status"], "unsafe_repair")
 
@@ -113,11 +113,11 @@ class BackgroundGuardPolicyTests(unittest.TestCase):
         with mock.patch.object(ocr, "_detect_regions", return_value=([BOX], [0.01])):
             self.assert_error(
                 "UNSAFE_TEXT_REPAIR",
-                lambda: ocr.inspect_background(self.image, cleanup_mask=tight, mode="repair_masked"),
+                lambda: ocr._inspect_background_local(self.image, cleanup_mask=tight, mode="repair_masked"),
             )
             self.assert_error(
                 "UNSAFE_TEXT_REPAIR",
-                lambda: ocr.inspect_background(self.image, cleanup_mask=full, protected_mask=protected, mode="repair_masked"),
+                lambda: ocr._inspect_background_local(self.image, cleanup_mask=full, protected_mask=protected, mode="repair_masked"),
             )
 
     @unittest.skipUnless(HAS_CV2, "OpenCV dependency is required for actual inpainting")
@@ -127,7 +127,7 @@ class BackgroundGuardPolicyTests(unittest.TestCase):
         cleanup = np.zeros((120, 200), dtype=bool)
         cleanup[15:46, 15:96] = True
         with mock.patch.object(ocr, "_detect_regions", side_effect=[([BOX], [0.01]), ([], [0.02])]) as detector:
-            output, checks = ocr.inspect_background(image, cleanup_mask=cleanup, mode="repair_masked")
+            output, checks = ocr._inspect_background_local(image, cleanup_mask=cleanup, mode="repair_masked")
         self.assertEqual(detector.call_count, 2)
         self.assertEqual(checks["status"], "repaired")
         self.assertEqual(checks["post_repair_unexpected_count"], 0)
@@ -141,14 +141,14 @@ class BackgroundGuardPolicyTests(unittest.TestCase):
         with mock.patch.object(ocr, "_detect_regions", side_effect=[([BOX], []), ([BOX], [])]):
             error = self.assert_error(
                 "BACKGROUND_TEXT_REMAINS",
-                lambda: ocr.inspect_background(self.image, cleanup_mask=cleanup, mode="repair_masked"),
+                lambda: ocr._inspect_background_local(self.image, cleanup_mask=cleanup, mode="repair_masked"),
             )
             self.assertEqual(error.details["status"], "rejected")
         unavailable = ocr.OCRGuardError("OCR_UNAVAILABLE", "detector unavailable", "restore detector")
         with mock.patch.object(ocr, "_detect_regions", side_effect=[([BOX], []), unavailable]):
             self.assert_error(
                 "OCR_UNAVAILABLE",
-                lambda: ocr.inspect_background(self.image, cleanup_mask=cleanup, mode="repair_masked"),
+                lambda: ocr._inspect_background_local(self.image, cleanup_mask=cleanup, mode="repair_masked"),
             )
 
 
@@ -170,7 +170,7 @@ class RealCPUOCRTests(unittest.TestCase):
     def test_bundled_models_run_offline_on_cpu_and_detect_cjk(self):
         self.assertEqual(self.engine.text_det.infer.session.get_providers(), ["CPUExecutionProvider"])
         with self.assertRaises(ocr.OCRGuardError) as caught:
-            ocr.inspect_background(self.text_image())
+            ocr._inspect_background_local(self.text_image())
         self.assertEqual(caught.exception.code, "BACKGROUND_TEXT_DETECTED")
         self.assertGreater(caught.exception.details["unexpected_count"], 0)
         self.assertFalse(caught.exception.details["recognition_used"])
@@ -179,7 +179,7 @@ class RealCPUOCRTests(unittest.TestCase):
         for text in ("原樣繁體文字", "Coffee & Croissant", "咖啡 Coffee 原樣"):
             with self.subTest(text=text):
                 with self.assertRaises(ocr.OCRGuardError) as caught:
-                    ocr.inspect_background(self.text_image(text))
+                    ocr._inspect_background_local(self.text_image(text))
                 self.assertEqual(caught.exception.code, "BACKGROUND_TEXT_DETECTED")
 
     def test_clean_soft_product_scene_passes(self):
@@ -195,7 +195,7 @@ class RealCPUOCRTests(unittest.TestCase):
         draw.rounded_rectangle((255, 202, 530, 376), radius=50, fill="#936442")
         draw.ellipse((255, 152, 530, 250), fill="#c3946e", outline="#ddc5a6", width=8)
         draw.ellipse((273, 170, 512, 234), fill="#503624")
-        output, checks = ocr.inspect_background(image)
+        output, checks = ocr._inspect_background_local(image)
         self.assertEqual(checks["unexpected_count"], 0)
         self.assertEqual(checks["status"], "passed")
         self.assertEqual(output.tobytes(), image.tobytes())
@@ -204,7 +204,7 @@ class RealCPUOCRTests(unittest.TestCase):
         image = self.text_image()
         cleanup = np.zeros((image.height, image.width), dtype=np.uint8)
         cleanup[30:270, 15:860] = 255
-        repaired, checks = ocr.inspect_background(image, cleanup_mask=cleanup, mode="repair_masked")
+        repaired, checks = ocr._inspect_background_local(image, cleanup_mask=cleanup, mode="repair_masked")
         self.assertEqual(checks["status"], "repaired")
         self.assertGreater(checks["detected_count"], 0)
         self.assertEqual(checks["post_repair_unexpected_count"], 0)
@@ -216,7 +216,7 @@ class RealCPUOCRTests(unittest.TestCase):
         # Do not publish a user's screenshot or require it for package CI.
         with Image.open(os.environ["PROMO_BAD_POSTER"]) as image:
             with self.assertRaises(ocr.OCRGuardError) as caught:
-                ocr.inspect_background(image)
+                ocr._inspect_background_local(image)
         self.assertEqual(caught.exception.code, "BACKGROUND_TEXT_DETECTED")
         self.assertGreater(caught.exception.details["unexpected_count"], 0)
 
