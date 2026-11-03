@@ -44,7 +44,7 @@
         "11",
         2
       ],
-      "negative_prompt": "text, typography, Chinese characters, letters, words, numbers, slogans, headlines, subtitles, captions, new watermark, new logo, promotional badge, sticker, button, signboard, advertising graphics, infographic, poster text, collage, split layout, footer panel, separator, frame, deformed product, low quality",
+      "negative_prompt": "text, typography, Chinese characters, letters, words, numbers, slogans, headlines, subtitles, captions, new watermark, new logo, poster text, garbled text, pseudo text, deformed product, low quality",
       "resolution": 0,
       "images.image_1": [
         "11",
@@ -56,7 +56,7 @@
       ]
     },
     "_meta": {
-      "title": "④ Qwen 仅生成连贯主视觉底图"
+      "title": "④ Qwen 无字商业海报 · 图形与主体整体设计"
     }
   },
   "6": {
@@ -151,7 +151,7 @@
         0
       ],
       "language": "zh-Hans",
-      "design_prompt": "柔和自然侧光，保留素材中人物、产品、数量及品牌标识的关键特征；温暖协调的背景与构图，主体完整清晰，背景自然延伸，整张画面连贯。",
+      "design_prompt": "用 <image2> 的人物或产品，在 <image1> 的目标尺寸内设计一张完整、有表现力的商业宣传海报。保留素材中指定人物的身份、产品外形、数量、结构、原有品牌标识及关键颜色。参考无字构图底板安排画面。\n\n整体设计：根据素材与调用方明确的风格要求统一视觉语言，让主体、环境与无字图形共同构成画面，兼顾商业吸引力、真实质感与清晰层次。没有指定风格时，从素材的色彩、用途与气质出发选择适合的设计，避免机械套用同一种模板。\n\n构图与节奏：根据目标画幅安排视觉重心，让主体大而完整，用适度错位、前后层次与疏密变化建立紧凑的视线动线，避免主体缩在画面底端或中间留下整面空白。保留合理呼吸空间与安全边距，不拉伸、不裁掉关键主体，不以装饰填满所有空隙。\n\n配色与图形：从素材中提取主色，搭配一种协调的强调色及中性色，保持品牌颜色准确。允许使用无字色带、曲线、刷痕、渐变、纸张或几何层次与少量点缀，组织画面节奏；图形服务于主体，不堆砌装饰。\n\n光影与材质：统一主光方向、色温、透视和景深，采用柔和而有层次的明暗过渡，保留细节及自然接触阴影。准确表现主体原有材质的细微纹理、透明度、光泽与边缘，避免塑料化、蜡感、过度磨皮或夸张锐化；食品饮品保留真实细节与自然诱人的色泽。主体与背景的亮度、反光和投影相互匹配，边缘融合干净，避免悬浮、白边、抠图感和不自然的光晕。",
       "style": "自动",
       "layout": "auto",
       "width": 1152,
@@ -162,10 +162,15 @@
       "body_size": 40,
       "font_family": "auto",
       "text_color": "auto",
-      "allow_mixed_scripts": false
+      "allow_mixed_scripts": false,
+      "typography_mode": "campaign",
+      "body_text": [
+        "24",
+        0
+      ]
     },
     "_meta": {
-      "title": "③ 原文与设计预检 · 唯一数量、尺寸及风格入口"
+      "title": "③ 原文与海报构图 · 唯一数量、尺寸及风格入口"
     }
   },
   "12": {
@@ -209,6 +214,15 @@
     },
     "_meta": {
       "title": "⑨ 逐图状态、复核提醒与失败原因"
+    }
+  },
+  "24": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": ""
+    },
+    "_meta": {
+      "title": "②B 正文原文 · 可留空，不自动续写"
     }
   }
 }

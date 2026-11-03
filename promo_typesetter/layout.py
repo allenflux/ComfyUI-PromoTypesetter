@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import regex
 from fontTools.ttLib import TTFont
-from PIL import Image, ImageColor, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 
 class PromoError(ValueError):
@@ -56,6 +56,11 @@ _STYLES = {
                 "foreground": ((230, 223, 204), (22, 25, 34)), "spacing": .20},
     "科技未来": {"canvas": "#111e31", "direction": "冷蓝与青色光、精确几何结构、玻璃金属质感与未来感空间",
                 "foreground": ((211, 249, 255), (9, 30, 49)), "spacing": .14},
+}
+_CAMPAIGN_ACCENTS = {
+    "auto": (194, 91, 21), "古风典雅": (159, 60, 37),
+    "现代简约": (79, 109, 88), "时尚潮流": (197, 26, 110),
+    "悬疑暗调": (206, 156, 76), "科技未来": (45, 211, 222),
 }
 _STYLE_ALIASES = {
     "classical": "古风典雅", "modern": "现代简约", "trendy": "时尚潮流",
@@ -278,22 +283,34 @@ def _regions(width, height, margin_ratio):
     }
 
 
-def _plan(name, region, copy_text, first_line_title, fonts, spacing=.15):
+def _plan(name, region, copy_text, first_line_title, fonts, spacing=.15,
+          compact=False, title_lines_override=None, title_variant=None, text_parts=None,
+          body_lines_override=None):
     left, top, right, bottom = region
-    if first_line_title:
+    if text_parts is not None:
+        title, body = text_parts
+    elif first_line_title:
         parts = re.split(r"(\r\n|\r|\n)", copy_text, maxsplit=1)
         title = parts[0]
         body = parts[2] if len(parts) == 3 else None
     else:
         title, body = None, copy_text
     # Small transparent padding includes glyph side bearings and accent edges.
-    padding = 3
+    padding = 7 if compact else 3
     width = right - left - padding * 2
-    title_lines = _wrap(title, fonts["title"], width) if title is not None else []
-    body_lines = _wrap(body, fonts["body"], width) if body is not None else []
+    title_lines = (list(title_lines_override) if title_lines_override is not None else
+                   _wrap(title, fonts["title"], width) if title is not None else [])
+    if any(_width(line, fonts["title"]) > width for line in title_lines):
+        raise PromoError("TEXT_TOO_LONG", "标题字形超过当前文字区域宽度。", ["title_size", "layout"])
+    body_lines = (list(body_lines_override) if body_lines_override is not None else
+                  _wrap(body, fonts["body"], width) if body is not None else [])
     title_advance = _advance(fonts["title"], title_lines, spacing)
+    if compact and title_lines:
+        ink_height = max(fonts["title"].getbbox(line, anchor="lt")[3] -
+                         fonts["title"].getbbox(line, anchor="lt")[1] for line in title_lines)
+        title_advance = ink_height + max(8, round(fonts["title"].size * .10))
     body_advance = _advance(fonts["body"], body_lines, spacing)
-    gap = max(10, round(fonts["body"].size * .5)) if title_lines and body_lines else 0
+    gap = max(10, round(fonts["body"].size * (.75 if compact else .5))) if title_lines and body_lines else 0
     required_height = len(title_lines) * title_advance + len(body_lines) * body_advance + gap
     if required_height + padding * 2 > bottom - top:
         raise PromoError("TEXT_TOO_LONG", "完整原文在该区域及当前字号下放不下。",
@@ -301,12 +318,16 @@ def _plan(name, region, copy_text, first_line_title, fonts, spacing=.15):
     y, lines = top + padding, []
     for role, wrapped, advance in (("title", title_lines, title_advance),
                                     ("body", body_lines, body_advance)):
-        for text in wrapped:
+        for line_index, text in enumerate(wrapped):
             bounds = fonts[role].getbbox(text, anchor="lt")
             ink_height = bounds[3] - bounds[1]
             line_width = _width(text, fonts[role])
             lines.append({"text": text, "role": role, "x": left + padding, "y": y,
                           "width": line_width, "height": ink_height, "advance": advance})
+            if compact:
+                lines[-1].update(font_size=fonts[role].size,
+                                 font_variant=title_variant if role == "title" else None,
+                                 accent=role == "title" and len(wrapped) > 1 and line_index == len(wrapped) - 1)
             y += advance
         if role == "title":
             y += gap
@@ -317,6 +338,117 @@ def _plan(name, region, copy_text, first_line_title, fonts, spacing=.15):
     return {"name": name, "region": region, "text_bbox": bbox,
             "title_lines": title_lines, "body_lines": body_lines, "lines": lines,
             "required_height": required_height}
+
+
+def _balanced_title(text, font):
+    """Two visual lines made only by splitting the original token sequence."""
+    tokens = _tokens(text)
+    candidates = []
+    for split in range(1, len(tokens)):
+        first, second = "".join(tokens[:split]), "".join(tokens[split:])
+        if not first.strip() or not second.strip() or first[-1] in _OPENING or second[0] in _CLOSING:
+            continue
+        a, b = _width(first, font), _width(second, font)
+        # On equally balanced CJK splits, prefer a slightly longer first line.
+        score = abs(a - b) + (font.size * .12 if a < b else 0)
+        candidates.append((score, first, second))
+    if not candidates:
+        return [text]
+    _, first, second = min(candidates, key=lambda item: item[0])
+    return [first, second]
+
+
+def _campaign_plan(name, region, copy_text, first_line_title, fonts, font_path, width,
+                   spacing, variants, text_parts=None):
+    """Give short headlines presence while fitting every original body line."""
+    if text_parts is None:
+        if first_line_title:
+            parts = re.split(r"(\r\n|\r|\n)", copy_text, maxsplit=1)
+            text_parts = (parts[0], parts[2] if len(parts) == 3 else None)
+        else:
+            text_parts = (None, copy_text)
+    title, _ = text_parts
+    unbroken = (title is not None and bool(title.strip()) and not re.search(r"[\r\n]", title)
+                and title.strip() == title)
+    clusters = regex.findall(r"\X", title or "")
+    short = unbroken and (len(clusters) <= 20 if regex.search(r"\p{Han}", title)
+                            else len(clusters) <= 48)
+    if not short:
+        return _plan(name, region, copy_text, first_line_title, fonts, spacing,
+                     compact=True, text_parts=text_parts)
+    # Fixed-size body wrapping does not change while the headline grows. Check
+    # the caller-sized baseline once and reuse its measured body lines, avoiding
+    # repeated full-paragraph shaping during the font-size search.
+    baseline = _plan(name, region, copy_text, first_line_title, fonts, spacing,
+                     compact=True, text_parts=text_parts)
+    title_font = fonts["title"]
+    lines = (_balanced_title(title, title_font) if len(clusters) >= 5 else [title])
+    available = region[2] - region[0] - 14
+    # Grow short headlines, then respect actual word/glyph widths and region height.
+    desired = min(256, max(title_font.size, round(width * .20)))
+    scale = available / max(_width(line, title_font) for line in lines)
+    size = min(desired, max(8, math.floor(title_font.size * scale)))
+    sizes = list(range(size, title_font.size - 1, -2)) if size >= title_font.size else []
+    # Include the caller's exact size even when the two-pixel search has different parity.
+    if title_font.size not in sizes:
+        sizes.append(title_font.size)
+    for size in sizes:
+        font = ImageFont.truetype(str(font_path), size)
+        key = f"title_{size}"
+        try:
+            plan = _plan(name, region, copy_text, first_line_title,
+                         {"title": font, "body": fonts["body"]}, spacing,
+                         compact=True, title_lines_override=lines, title_variant=key,
+                         text_parts=text_parts, body_lines_override=baseline["body_lines"])
+            variants[key] = font
+            return plan
+        except PromoError as exc:
+            if exc.code != "TEXT_TOO_LONG":
+                raise
+    # Never make existing caller-sized text smaller just to force a design.
+    # When a balanced headline would crowd the body, retain its natural wrapping
+    # at the original size. Overflow still fails rather than shrinking any copy.
+    return baseline
+
+
+def _campaign_canvas(width, height, style, accent):
+    """An actual text-free design foundation, with no placeholder boxes/glyphs."""
+    base = np.asarray(ImageColor.getrgb(_STYLES[style]["canvas"]), dtype=np.float32)
+    ink = np.asarray(accent, dtype=np.float32)
+    y = np.linspace(0, 1, height, dtype=np.float32)[:, None, None]
+    strength = .11 if style in ("悬疑暗调", "科技未来") else .19
+    pixels = np.broadcast_to(base * (1 - y * strength) + ink * (y * strength),
+                             (height, width, 3)).astype(np.uint8).copy()
+    canvas = Image.fromarray(pixels, "RGB").convert("RGBA")
+    soft = Image.new("RGBA", canvas.size)
+    draw = ImageDraw.Draw(soft)
+    if style in ("悬疑暗调", "科技未来"):
+        draw.ellipse((width * .15, height * .30, width * 1.25, height * 1.05),
+                     fill=(*accent, 48))
+    else:
+        draw.ellipse((-width * .22, height * .42, width * 1.45, height * 1.30),
+                     fill=(*accent, 54 if style == "时尚潮流" else 32))
+        draw.ellipse((width * .76, -height * .12, width * 1.25, height * .25),
+                     fill=(*accent, 22))
+    canvas = Image.alpha_composite(canvas, soft.filter(ImageFilter.GaussianBlur(max(8, width * .025))))
+    geometry = Image.new("RGBA", canvas.size)
+    draw = ImageDraw.Draw(geometry)
+    if style == "科技未来":
+        for offset in (0, .035, .07):
+            draw.arc((width * (.15 + offset), height * .44, width * (1.18 + offset), height * 1.12),
+                     190, 300, fill=(*accent, 95), width=max(2, round(width * .002)))
+    elif style == "现代简约":
+        draw.polygon([(0, height * .78), (width, height * .48), (width, height), (0, height)],
+                     fill=(*accent, 15))
+    elif style == "古风典雅":
+        draw.arc((-width * .22, height * .43, width * 1.45, height * 1.38),
+                 195, 290, fill=(*accent, 66), width=max(2, round(width * .004)))
+    else:
+        draw.arc((-width * .30, height * .36, width * 1.4, height * 1.35),
+                 195, 280, fill=(*accent, 90), width=max(3, round(width * .007)))
+        draw.arc((-width * .30, height * .39, width * 1.4, height * 1.38),
+                 195, 280, fill=(*accent, 40), width=max(2, round(width * .002)))
+    return Image.alpha_composite(canvas, geometry).convert("RGB")
 
 
 def _overlaps_mask(plan, protected):
@@ -342,11 +474,14 @@ def _rgb_color(value):
 def prepare(copy_text, design_prompt, font_path, width, height, count=1,
             first_line_title=True, title_size=96, body_size=36, layout="auto",
             style="auto", text_color="auto", margin_ratio=.06, protected_mask=None,
-            language="zh-Hans", allow_mixed_scripts=False):
+            language="zh-Hans", allow_mixed_scripts=False, typography_mode="manual",
+            campaign_accent=None, title_text=None, body_text=None):
     """Measure exact copy before sampling and reserve a transparent text area.
 
     ``protected_mask`` marks pixels that may not be covered by the text block.
     The optional mask must already use the requested final canvas dimensions.
+    Explicit ``title_text`` / ``body_text`` preserve their independent line breaks;
+    absent fields retain the legacy first-line-title interpretation of copy_text.
     """
     width = _integer(width, "width", 512, 4096)
     height = _integer(height, "height", 512, 4096)
@@ -359,19 +494,57 @@ def prepare(copy_text, design_prompt, font_path, width, height, count=1,
         _fail("INVALID_MARGIN", "margin_ratio 必须在 0.02–0.15 之间。", ["margin_ratio"])
     if layout not in ("auto", "top", "left", "bottom"):
         _fail("INVALID_LAYOUT", "请选择 auto、top、left 或 bottom。", ["layout"])
+    if typography_mode not in ("manual", "campaign"):
+        _fail("INVALID_TYPOGRAPHY_MODE", "请选择 campaign 或 manual 排版模式。", ["typography_mode"])
     if text_color != "auto":
         _rgb_color(text_color)
+    explicit_parts = title_text is not None or body_text is not None
+    if explicit_parts:
+        title_text = copy_text if title_text is None else title_text
+        body_text = "" if body_text is None else body_text
+        if not isinstance(body_text, str):
+            _fail("INVALID_BODY_TEXT", "正文必须是原始字符串或留空。", ["body_text"])
+        _validate_copy(title_text, language, allow_mixed_scripts)
+        copy_text = title_text + ("\n" + body_text if body_text else "")
+        text_parts = (title_text, body_text if body_text else None)
+    elif first_line_title:
+        # Validate the type before splitting, retaining the original error contract.
+        _validate_copy(copy_text, language, allow_mixed_scripts)
+        legacy = re.split(r"(\r\n|\r|\n)", copy_text, maxsplit=1)
+        text_parts = (legacy[0], legacy[2] if len(legacy) == 3 else None)
+        title_text, body_text = text_parts[0], text_parts[1] or ""
+    else:
+        text_parts = (None, copy_text)
+        title_text, body_text = "", copy_text
     _validate_copy(copy_text, language, allow_mixed_scripts)
     requested_style = style
     style = resolve_style(style, design_prompt)
+    accent = _CAMPAIGN_ACCENTS[style] if campaign_accent is None else campaign_accent
+    if not isinstance(accent, (tuple, list)) or len(accent) != 3 or any(
+            type(channel) is not int or not 0 <= channel <= 255 for channel in accent):
+        _fail("INVALID_ACCENT", "设计强调色必须是三个0–255整数的RGB颜色。", ["campaign_accent"])
+    accent = tuple(accent)
     fonts = _load_fonts(font_path, title_size, body_size, copy_text)
     protected = _mask_array(protected_mask, width, height)
     regions = _regions(width, height, float(margin_ratio))
+    if typography_mode == "campaign":
+        # The compact two-line headline has a measured height. Avoid reserving
+        # a large fixed empty wall independently of the actual typography.
+        regions["top"] = (regions["top"][0], regions["top"][1], regions["top"][2],
+                          min(height - round(height * margin_ratio), round(height * .43)))
+        regions["bottom"] = (regions["bottom"][0], round(height * .57),
+                             regions["bottom"][2], regions["bottom"][3])
     names = list(regions) if layout == "auto" else [layout]
-    plans, fitted = [], []
+    plans, fitted, font_variants = [], [], {}
     for name in names:
         try:
-            plan = _plan(name, regions[name], copy_text, first_line_title, fonts, _STYLES[style]["spacing"])
+            if typography_mode == "campaign":
+                plan = _campaign_plan(name, regions[name], copy_text, first_line_title, fonts,
+                                      font_path, width, _STYLES[style]["spacing"], font_variants,
+                                      text_parts=text_parts)
+            else:
+                plan = _plan(name, regions[name], copy_text, first_line_title, fonts,
+                             _STYLES[style]["spacing"], text_parts=text_parts)
         except PromoError as exc:
             if exc.code != "TEXT_TOO_LONG":
                 raise
@@ -389,17 +562,39 @@ def prepare(copy_text, design_prompt, font_path, width, height, count=1,
     position = {"top": "画面上方约三分之一保留连续、干净、平整的背景，主体位于下半部",
                 "left": "画面左侧约一半保留连续、干净、平整的背景，主体位于右侧",
                 "bottom": "画面下方约三分之一保留连续、干净、平整的背景，主体位于上半部"}[reserve["name"]]
-    prompt = ("以 <image2> 的人物、产品或界面为主体，在 <image1> 的尺寸内制作完整、连贯的无字主视觉底图，"
+    if typography_mode == "campaign":
+        bx, by, br, bb = reserve["text_bbox"]
+        gap = max(24, round(height * .035))
+        if reserve["name"] == "top":
+            position = (f"后续文字区位于画面左起约{round(bx / width * 100)}%、上起约{round(by / height * 100)}%，"
+                        f"延伸至高度约{round(bb / height * 100)}%；此区域保留可读的自然底色。"
+                        f"主视觉紧接其下，从高度约{round((bb + gap) / height * 100)}%处开始，"
+                        "以有冲击力的大主体填充中下部，避免文字区与主体之间出现大片空白墙")
+        elif reserve["name"] == "left":
+            position = (f"后续文字区在左侧，最右到画面宽度约{round(br / width * 100)}%；"
+                        "主体以大比例布局在右侧，与左侧排字形成紧凑错位，避免画面左右分割")
+        else:
+            position = (f"后续文字从高度约{round(by / height * 100)}%处开始位于画面下方，"
+                        f"主体延伸至高度约{round(max(0, by - gap) / height * 100)}%，上下紧密衔接")
+    canvas_role = ("<image1> 是无字构图与配色引导，请沿用其视觉动势并自然完善；"
+                   if typography_mode == "campaign" else "<image1> 决定输出尺寸与画面比例；")
+    prompt = (canvas_role + "以 <image2> 的人物、产品或界面为主体，制作有完整商业设计感、连贯的无字宣传海报底图，"
               "保留主体外形、身份、数量及品牌特征。" + _STYLES[style]["direction"] + "。" + position
-              + "；背景自然延伸到主体周围，整个画面连贯。视觉要求：" + design_prompt
-              + "。画面仅包含实际主体、环境、材质和光影。")
-    generation_canvas = Image.new("RGB", (math.ceil(width / 32) * 32, math.ceil(height / 32) * 32),
-                                  _STYLES[style]["canvas"])
-    return {"copy_text": copy_text, "prompt": prompt, "generation_canvas": generation_canvas,
+              + "；背景与主体自然融合，允许与风格协调的无字色带、曲线、刷痕、纸张层次、几何点缀与光影。"
+              "这些装饰应参与整体构图，形成视觉节奏，不能变成上下割裂的拼接块或单纯的空白产品照片。视觉要求："
+              + design_prompt + "。不画文字、伪字、文字占位符或调试边框。")
+    canvas_size = (math.ceil(width / 32) * 32, math.ceil(height / 32) * 32)
+    generation_canvas = (_campaign_canvas(*canvas_size, style, accent) if typography_mode == "campaign" else
+                         Image.new("RGB", canvas_size, _STYLES[style]["canvas"]))
+    return {"copy_text": copy_text, "title_text": title_text, "body_text": body_text,
+            "explicit_text_fields": explicit_parts,
+            "prompt": prompt, "generation_canvas": generation_canvas,
             "width": width, "height": height, "count": count, "language": language,
             "allow_mixed_scripts": allow_mixed_scripts, "candidate_plans": plans,
             "reserved_region": reserve["region"], "reserved_layout": reserve["name"],
             "font_path": str(Path(font_path)), "font": Path(font_path).name, "fonts": fonts,
+            "font_variants": font_variants, "typography_mode": typography_mode,
+            "campaign_accent": accent,
             "layout": layout, "style": style, "requested_style": requested_style,
             "text_color": text_color,
             "foreground_palette": _STYLES[style]["foreground"],
@@ -468,21 +663,53 @@ def render_text_layer(context, background, protected_mask=None, allow_low_contra
                   ["layout", "protected_mask"])
         _fail("LOW_TEXT_CONTRAST", "可用文字区无法在当前文字颜色下保证清晰对比度。",
               ["text_color", "layout", "background"])
-    _, plan, contrast, color = min(candidates, key=lambda candidate: candidate[0])
+    if context.get("typography_mode") == "campaign":
+        # The generated scene was art-directed around this text position.
+        # Move only when readability/protection excluded the planned region.
+        _, plan, contrast, color = min(candidates, key=lambda candidate: (
+            candidate[1]["name"] != context["reserved_layout"], candidate[0]))
+    else:
+        _, plan, contrast, color = min(candidates, key=lambda candidate: candidate[0])
     layer = Image.new("RGBA", background.size, (0, 0, 0, 0))
     low_contrast = contrast < 3.0
+    line_styles = []
+
+    def line_font(line):
+        return context.get("font_variants", {}).get(line.get("font_variant"), context["fonts"][line["role"]])
+
+    def line_color(line):
+        if (not line.get("accent") or context["text_color"] != "auto"
+                or context.get("typography_mode") != "campaign"):
+            return color
+        accent = context["campaign_accent"]
+        # An emphasis color is decorative only when it remains readable.
+        bounds = (round(line["x"]), round(line["y"]),
+                  math.ceil(line["x"] + line["width"]), math.ceil(line["y"] + line["height"]))
+        check_plan = {"text_bbox": bounds}
+        _, accent_contrast, _ = _region_score(background, check_plan, "#%02x%02x%02x" % accent)
+        return accent if accent_contrast >= 3.0 else color
+
+    for line in plan["lines"]:
+        selected_color = line_color(line)
+        line_styles.append({"text": line["text"], "role": line["role"],
+                            "font_size": line_font(line).size,
+                            "color": "#%02x%02x%02x" % selected_color,
+                            "accent": bool(line.get("accent") and selected_color != color)})
 
     def draw_lines(outline):
         target = Image.new("RGBA", background.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(target)
         stroke_color = (255, 255, 255) if float(_linear_luminance(color)) < .5 else (20, 20, 20)
-        for line in plan["lines"]:
-            font = context["fonts"][line["role"]]
+        for line, line_style in zip(plan["lines"], line_styles):
+            font = line_font(line)
+            fill_color = _rgb_color(line_style["color"])
             bounds = font.getbbox(line["text"], anchor="lt")
             stroke = min(3, max(1, round(font.size * .02))) if outline else 0
+            weight = (min(3, max(1, round(font.size * .009)))
+                      if context.get("typography_mode") == "campaign" and line["role"] == "title" else 0)
             draw.text((line["x"] - bounds[0], line["y"] - bounds[1]), line["text"],
-                      font=font, fill=(*color, 255), anchor="lt", stroke_width=stroke,
-                      stroke_fill=(*stroke_color, 220))
+                      font=font, fill=(*fill_color, 255), anchor="lt", stroke_width=stroke or weight,
+                      stroke_fill=(*stroke_color, 220) if outline else (*fill_color, 255))
         return target
 
     layer = draw_lines(low_contrast)
@@ -499,15 +726,21 @@ def render_text_layer(context, background, protected_mask=None, allow_low_contra
         _fail("EMPTY_TEXT_LAYER", "字体没有生成可见字形。", ["copy_text", "font"])
     if not (0 <= box[0] < box[2] <= context["width"] and 0 <= box[1] < box[3] <= context["height"]):
         _fail("TEXT_OVERFLOW", "实际字形超出最终画布。", ["layout", "title_size", "body_size"])
-    manifest = {"copy_text": context["copy_text"], "language": context["language"],
+    manifest = {"copy_text": context["copy_text"],
+                "title_text": context.get("title_text", ""),
+                "body_text": context.get("body_text", ""),
+                "language": context["language"],
                 "width": context["width"], "height": context["height"], "count": context["count"],
                 "font": context["font"], "font_rendering": "real_font_glyphs",
                 "style": context["style"], "requested_style": context["requested_style"],
+                "typography_mode": context.get("typography_mode", "manual"),
+                "accent_color": "#%02x%02x%02x" % context.get("campaign_accent", _CAMPAIGN_ACCENTS[context["style"]]),
                 "line_spacing_ratio": context["line_spacing_ratio"],
                 "layout": plan["name"], "text_region": list(plan["region"]),
                 "text_bbox": list(box), "text_color": "#%02x%02x%02x" % color,
                 "contrast_10th_percentile": round(contrast, 3),
                 "title_lines": list(plan["title_lines"]), "body_lines": list(plan["body_lines"]),
+                "line_styles": line_styles,
                 "checks": {"copy": "passed", "glyph_coverage": "passed", "layout": "passed",
                            "contrast": "review_required" if low_contrast else "passed",
                            "subject_protection": "passed" if protected is not None else "not_provided",

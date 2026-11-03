@@ -69,7 +69,8 @@ class NodeIntegrationTests(unittest.TestCase):
     def prepare(self, text="咖啡还是我的好", **kwargs):
         options = {"material": self.material, "copy_text": text, "width": 1024,
                    "height": 1024, "title_size": 72, "body_size": 28,
-                   "design_prompt": "柔和自然光，产品位于下半部。"}
+                   "design_prompt": "柔和自然光，产品位于下半部。",
+                   "typography_mode": "manual"}
         options.update(kwargs)
         return nodes.PromoTextPrepare().run(**options)
 
@@ -90,6 +91,131 @@ class NodeIntegrationTests(unittest.TestCase):
             self.prepare(**kwargs)
         self.assertEqual(caught.exception.code, code)
         self.assertTrue(caught.exception.needs_adjustment)
+
+    def test_default_campaign_balances_title_and_returns_four_exact_font_images_without_ocr(self):
+        material = torch.tensor([.64, .35, .13]).expand(1, 128, 160, 3).clone()
+        original_material = material.clone()
+        title, body = "咖啡还是我的好", "午后一起，咖啡配可颂。"
+        combined = title + "\n" + body
+        # Deliberately omit typography_mode: new/default UI and API callers
+        # must receive the coordinated campaign layout, not the old blank wall.
+        canvas, context, prompt, count = nodes.PromoTextPrepare().run(
+            material=material, copy_text=title, body_text=body, width=1152,
+            height=1536, count=4, title_size=112, body_size=40)
+        self.assertEqual(count, 4)
+        self.assertEqual(context["typography_mode"], "campaign")
+        self.assertEqual((context["title_text"], context["body_text"]), (title, body))
+        self.assertEqual(context["copy_text"], combined)
+        self.assertEqual(canvas.shape, (1, 1536, 1152, 3))
+        spatial_change = (canvas - canvas[:, :1, :1, :]).abs().max().item()
+        self.assertGreater(spatial_change, .02)
+        self.assertTrue(torch.equal(material, original_material))
+        self.assertNotIn(title, prompt)
+        self.assertNotIn(body, prompt)
+        self.assertTrue(context["font"].startswith("NotoSerif"))
+
+        batch = torch.full((4, 1536, 1152, 3), .94)
+        with mock.patch.object(nodes, "inspect_background", side_effect=AssertionError("OCR must stay off")) as guard:
+            result, previews = self.render(batch, context)
+        guard.assert_not_called()
+        self.assertEqual((result["success_count"], result["failed_count"]), (4, 0))
+        self.assertEqual((result["title_text"], result["body_text"]), (title, body))
+        self.assertEqual(len(previews), 4)
+        self.assertEqual(len(list(self.output_dir.rglob("*.png"))), 4)
+        for item in result["images"]:
+            self.assertEqual(item["status"], "success")
+            self.assertEqual(item["copy_text"], combined)
+            self.assertEqual((item["title_text"], item["body_text"]), (title, body))
+            with Image.open(self.image_path(item)) as output:
+                manifest = json.loads(output.info["promo"])
+                self.assertEqual(output.size, (1152, 1536))
+                self.assertEqual(manifest["typography_mode"], "campaign")
+                self.assertEqual((manifest["title_text"], manifest["body_text"]), (title, body))
+                self.assertEqual(manifest["title_lines"], ["咖啡还是", "我的好"])
+                self.assertEqual("".join(manifest["title_lines"]), title)
+                self.assertEqual("".join(manifest["body_lines"]), body)
+                title_styles = [line for line in manifest["line_styles"] if line["role"] == "title"]
+                self.assertEqual(len(title_styles), 2)
+                self.assertGreater(min(line["font_size"] for line in title_styles), 112)
+                self.assertEqual(manifest["ocr"], {"status": "not_run", "mode": "off"})
+                self.assertEqual(manifest["font_rendering"], "real_font_glyphs")
+
+    def test_separate_title_and_body_preserve_crlf_spaces_and_metadata(self):
+        title = "  咖啡\r\n还是我的好  "
+        body = "  午后 Coffee  \r\n完整原文，保留空格。  "
+        combined = title + "\n" + body
+        _, context, prompt, _ = self.prepare(
+            title, body_text=body, allow_mixed_scripts=True, title_size=44, body_size=26)
+        self.assertEqual(context["title_text"].encode(), title.encode())
+        self.assertEqual(context["body_text"].encode(), body.encode())
+        self.assertNotIn(title, prompt)
+        self.assertNotIn(body, prompt)
+        result, _ = self.render(torch.full((1, 1024, 1024, 3), .94), context)
+        self.assertEqual(result["title_text"].encode(), title.encode())
+        self.assertEqual(result["body_text"].encode(), body.encode())
+        item = result["images"][0]
+        self.assertEqual(item["title_text"].encode(), title.encode())
+        self.assertEqual(item["body_text"].encode(), body.encode())
+        self.assertEqual(item["copy_text"].encode(), combined.encode())
+        self.assertEqual(item["copy_sha256"], hashlib.sha256(combined.encode()).hexdigest())
+        with Image.open(self.image_path(item)) as output:
+            manifest = json.loads(output.info["promo"])
+            self.assertEqual(manifest["title_text"].encode(), title.encode())
+            self.assertEqual(manifest["body_text"].encode(), body.encode())
+            self.assertEqual(manifest["title_lines"], ["  咖啡", "还是我的好  "])
+            self.assertEqual(manifest["body_lines"], ["  午后 Coffee  ", "完整原文，保留空格。  "])
+
+    def test_empty_separate_body_and_legacy_none_do_not_invent_body_copy(self):
+        title = "咖啡还是我的好"
+        for body in ("", None):
+            with self.subTest(body=body):
+                _, context, _, _ = self.prepare(title, body_text=body)
+                self.assertEqual((context["title_text"], context["body_text"]), (title, ""))
+                result, _ = self.render(torch.full((1, 1024, 1024, 3), .94), context)
+                item = result["images"][0]
+                self.assertEqual((item["title_text"], item["body_text"]), (title, ""))
+                self.assertEqual(item["copy_text"], title)
+                self.assertEqual(item["typography"]["body_lines"], [])
+
+        legacy = "咖啡还是我的好\r\n原样正文  "
+        _, context, _, _ = self.prepare(legacy, body_text=None, title_size=52)
+        result, _ = self.render(torch.full((1, 1024, 1024, 3), .94), context)
+        self.assertEqual(result["copy_text"].encode(), legacy.encode())
+        self.assertEqual((result["title_text"], result["body_text"]), (title, "原样正文  "))
+        self.assertEqual(result["images"][0]["typography"]["body_lines"], ["原样正文  "])
+
+    def test_separate_body_overflow_and_language_conflicts_fail_before_sampling(self):
+        body = "完整正文保持原样。" * 300
+        self.assert_prepare_error("TEXT_TOO_LONG", body_text=body)
+        self.assert_prepare_error("TEXT_TOO_LONG", text="完整标题保持原样。" * 300, body_text="正文")
+        self.assert_prepare_error("LANGUAGE_CONFLICT", body_text="繁體廣告", language="zh-Hans")
+        self.assert_prepare_error("LANGUAGE_CONFLICT", text="Coffee", body_text="中文正文", language="en")
+
+    def test_whitespace_only_separate_body_is_preserved_without_trimming(self):
+        title, body = "咖啡还是我的好", "  \r\n "
+        _, context, _, _ = self.prepare(title, body_text=body)
+        self.assertEqual(context["body_text"].encode(), body.encode())
+        result, _ = self.render(torch.full((1, 1024, 1024, 3), .94), context)
+        self.assertEqual(result["copy_text"].encode(), (title + "\n" + body).encode())
+        self.assertEqual(result["body_text"].encode(), body.encode())
+        manifest = result["images"][0]["typography"]
+        self.assertEqual(manifest["body_text"].encode(), body.encode())
+        self.assertEqual(manifest["body_lines"], ["  ", " "])
+
+    def test_explicit_manual_mode_keeps_requested_size_and_uniform_canvas(self):
+        canvas, context, _, _ = self.prepare(title_size=72, body_size=28, typography_mode="manual")
+        self.assertEqual(context["typography_mode"], "manual")
+        self.assertEqual(context["fonts"]["title"].size, 72)
+        self.assertEqual(context["fonts"]["body"].size, 28)
+        self.assertTrue(torch.all(canvas == canvas[:, :1, :1, :]).item())
+        result, _ = self.render(torch.full((1, 1024, 1024, 3), .94), context)
+        self.assertEqual(result["images"][0]["typography"]["title_lines"], ["咖啡还是我的好"])
+
+    def test_campaign_honors_explicit_font_family_and_rejects_unknown_mode(self):
+        material = torch.tensor([.64, .35, .13]).expand(1, 128, 160, 3).clone()
+        _, context, _, _ = self.prepare(material=material, typography_mode="campaign", font_family="sans")
+        self.assertTrue(context["font"].startswith("NotoSans"))
+        self.assert_prepare_error("INVALID_TYPOGRAPHY_MODE", typography_mode="unknown")
 
     def test_one_render_invocation_handles_each_requested_batch_count(self):
         for count in (1, 2, 3, 4):

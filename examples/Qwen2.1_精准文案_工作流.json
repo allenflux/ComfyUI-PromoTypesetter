@@ -1,8 +1,8 @@
 {
   "id": "e9b5dd5a-1bb0-4233-bee5-677f2ffbde4c",
   "revision": 0,
-  "last_node_id": 22,
-  "last_link_id": 19,
+  "last_node_id": 24,
+  "last_link_id": 20,
   "nodes": [
     {
       "id": 1,
@@ -187,19 +187,54 @@
       "bgcolor": "#3b5d43"
     },
     {
-      "id": 11,
-      "type": "PromoTextPrepare",
-      "title": "③ 原文与设计预检 · 唯一数量、尺寸及风格入口",
+      "id": 24,
+      "type": "PrimitiveStringMultiline",
+      "title": "②B 正文原文 · 可留空，不自动续写",
       "pos": [
         440,
-        300
+        235
       ],
       "size": [
         470,
-        780
+        170
       ],
       "flags": {},
       "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            20
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline",
+        "cnr_id": "comfy-core"
+      },
+      "widgets_values": [
+        ""
+      ],
+      "color": "#263f2c",
+      "bgcolor": "#3b5d43"
+    },
+    {
+      "id": 11,
+      "type": "PromoTextPrepare",
+      "title": "③ 原文与海报构图 · 唯一数量、尺寸及风格入口",
+      "pos": [
+        440,
+        450
+      ],
+      "size": [
+        470,
+        850
+      ],
+      "flags": {},
+      "order": 6,
       "mode": 0,
       "inputs": [
         {
@@ -244,6 +279,14 @@
           "type": "MASK",
           "shape": 7,
           "link": null
+        },
+        {
+          "name": "body_text",
+          "type": "STRING",
+          "widget": {
+            "name": "body_text"
+          },
+          "link": 20
         }
       ],
       "outputs": [
@@ -283,7 +326,7 @@
       "widgets_values": [
         "",
         "zh-Hans",
-        "柔和自然侧光，保留素材中人物、产品、数量及品牌标识的关键特征；温暖协调的背景与构图，主体完整清晰，背景自然延伸，整张画面连贯。",
+        "用 <image2> 的人物或产品，在 <image1> 的目标尺寸内设计一张完整、有表现力的商业宣传海报。保留素材中指定人物的身份、产品外形、数量、结构、原有品牌标识及关键颜色。参考无字构图底板安排画面。\n\n整体设计：根据素材与调用方明确的风格要求统一视觉语言，让主体、环境与无字图形共同构成画面，兼顾商业吸引力、真实质感与清晰层次。没有指定风格时，从素材的色彩、用途与气质出发选择适合的设计，避免机械套用同一种模板。\n\n构图与节奏：根据目标画幅安排视觉重心，让主体大而完整，用适度错位、前后层次与疏密变化建立紧凑的视线动线，避免主体缩在画面底端或中间留下整面空白。保留合理呼吸空间与安全边距，不拉伸、不裁掉关键主体，不以装饰填满所有空隙。\n\n配色与图形：从素材中提取主色，搭配一种协调的强调色及中性色，保持品牌颜色准确。允许使用无字色带、曲线、刷痕、渐变、纸张或几何层次与少量点缀，组织画面节奏；图形服务于主体，不堆砌装饰。\n\n光影与材质：统一主光方向、色温、透视和景深，采用柔和而有层次的明暗过渡，保留细节及自然接触阴影。准确表现主体原有材质的细微纹理、透明度、光泽与边缘，避免塑料化、蜡感、过度磨皮或夸张锐化；食品饮品保留真实细节与自然诱人的色泽。主体与背景的亮度、反光和投影相互匹配，边缘融合干净，避免悬浮、白边、抠图感和不自然的光晕。",
         "自动",
         "auto",
         1152,
@@ -294,7 +337,9 @@
         40,
         "auto",
         "auto",
-        false
+        false,
+        "campaign",
+        ""
       ],
       "color": "#263f2c",
       "bgcolor": "#3b5d43"
@@ -311,7 +356,7 @@
         480
       ],
       "flags": {},
-      "order": 6,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
@@ -378,7 +423,7 @@
           ]
         }
       ],
-      "title": "④ Qwen 仅生成连贯主视觉底图",
+      "title": "④ Qwen 无字商业海报 · 图形与主体整体设计",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.37.4",
@@ -386,7 +431,7 @@
       },
       "widgets_values": [
         "",
-        "text, typography, Chinese characters, letters, words, numbers, slogans, headlines, subtitles, captions, new watermark, new logo, promotional badge, sticker, button, signboard, advertising graphics, infographic, poster text, collage, split layout, footer panel, separator, frame, deformed product, low quality",
+        "text, typography, Chinese characters, letters, words, numbers, slogans, headlines, subtitles, captions, new watermark, new logo, poster text, garbled text, pseudo text, deformed product, low quality",
         0
       ]
     },
@@ -402,7 +447,7 @@
         110
       ],
       "flags": {},
-      "order": 7,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
@@ -450,7 +495,7 @@
         300
       ],
       "flags": {},
-      "order": 8,
+      "order": 9,
       "mode": 0,
       "inputs": [
         {
@@ -511,7 +556,7 @@
         90
       ],
       "flags": {},
-      "order": 9,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
@@ -555,7 +600,7 @@
         560
       ],
       "flags": {},
-      "order": 10,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -593,7 +638,7 @@
         640
       ],
       "flags": {},
-      "order": 11,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
@@ -653,7 +698,7 @@
         960
       ],
       "flags": {},
-      "order": 12,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -690,16 +735,16 @@
         360
       ],
       "flags": {},
-      "order": 13,
+      "order": 14,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "使用前阅读 · 无字底图、自动文字区与原文排版",
+      "title": "使用前阅读 · 商业海报构图与精准原文",
       "properties": {
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "默认流程：Qwen 无字底图 → 按留白、纹理和对比度自动选文字区 → 真实字体绘制指定原文 → 保存并预览。ocr_mode=off，不运行 OCR，不需要安装 OCR 环境。\n安装或更新节点后重载 ComfyUI；只需 requirements.txt 主依赖。详见 README。\n① 必须上传宣传主体素材，同时连接准备节点和 Qwen；不能以风格参考图代替主体素材，不能退化为纯文生图。\n② 在独立文案输入框填写完整上图文案。原文不拼入 Qwen 提示词，不补写、翻译或简繁转换；排不下时调整输入、字号或画布，不自动删改。\n③ Qwen 只生成无字设计底图并预留文字空间。auto 按候选区域留白、纹理和对比度选位置，不识别人物或产品身份；严格保护关键主体请接 protected_mask。\n④ 支持自动风格及五种风格，数量 1–4 由同一次 KSampler 批量完成；额外素材必须分别接到准备节点及 Qwen。\n⑤ ⑦A 仅显示未校验底图；⑧ 显示排字后已保存图片；⑨ 显示 result_json。日志 Prompt executed 不代表图片已验收成功。实际图像仍需逐图验收。\n⑥ 默认 quality_policy=return_with_warnings：有有效底图就继续排字并返回图片，可读性提醒不再导致0张输出。success_count 是实际出图数，passed_count / review_count 区分自动检查通过与待复核；warnings 保留原因。\n可选高级 OCR：仅主动选择 reject / repair_masked 时才需 python scripts/setup_ocr.py；默认不启用。启用后疑似文字或检测故障仍随图提醒 review_required；strict 仅供主动选择拒收。repair_masked 需要明确的清理遮罩，不能侵入主体保护区。"
+        "默认流程：先按独立标题与正文规划商业海报构图 → Qwen 参考无字构图底板生成主视觉 → 真实字体按方案落字 → 保存并预览。ocr_mode=off，不运行 OCR，不需要安装 OCR 环境。\n安装或更新节点后重载 ComfyUI；只需 requirements.txt 主依赖。详见 README。\n① 必须上传宣传主体素材，同时连接准备节点和 Qwen；不能以风格参考图代替主体素材，不能退化为纯文生图。\n② 原有文案框（node20/copy_text）填写标题，新增正文框（node24/body_text）单独填写正文，可留空。正文为空时不补写、不保留正文占位；标题和正文都由真实字体排版，不拼入 Qwen 提示词，不翻译、转换简繁或自动删改。\n③ typography_mode=campaign：根据原文字数规划更有分量的标题，短标题可做两行平衡排版；无字构图底板、主体位置、字体与风格强调色共同设计，不再固定大白墙。manual 保留调用方指定字号。\n④ Qwen 可以设计无字色带、弧线、刷痕等海报图形，只禁止新增文字或伪字。排字优先保持预定构图，再依据留白、纹理和对比度判断可读性；不识别人物或产品身份，严格保护关键主体请接 protected_mask。\n⑤ 支持自动风格及五种风格，数量 1–4 由同一次 KSampler 批量完成；额外素材必须分别接到准备节点及 Qwen。\n⑥ ⑦A 仅显示未校验底图；⑧ 显示排字后已保存图片；⑨ 显示 result_json。日志 Prompt executed 不代表图片已验收成功。实际图像仍需逐图验收。\n⑦ 默认 quality_policy=return_with_warnings：有有效底图就继续排字并返回图片，可读性提醒不再导致0张输出。success_count 是实际出图数，passed_count / review_count 区分自动检查通过与待复核；warnings 保留原因。\n可选高级 OCR：仅主动选择 reject / repair_masked 时才需 python scripts/setup_ocr.py；默认不启用。启用后疑似文字或检测故障仍随图提醒 review_required；strict 仅供主动选择拒收。repair_masked 需要明确的清理遮罩，不能侵入主体保护区。"
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -857,6 +902,14 @@
       22,
       0,
       "STRING"
+    ],
+    [
+      20,
+      24,
+      0,
+      11,
+      7,
+      "STRING"
     ]
   ],
   "groups": [],
@@ -869,7 +922,7 @@
         40
       ]
     },
-    "promo_typesetter_version": "0.1.3"
+    "promo_typesetter_version": "0.1.4"
   },
   "version": 0.4
 }

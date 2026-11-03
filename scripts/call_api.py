@@ -21,6 +21,7 @@ DEFAULT_WORKFLOW = Path(__file__).resolve().parents[1] / "examples" / "Qwen2.1_�
 STYLES = ["自动", "古风典雅", "现代简约", "时尚潮流", "悬疑暗调", "科技未来"]
 QUALITY_POLICIES = ["return_with_warnings", "strict"]
 OCR_MODES = ["off", "reject", "repair_masked"]
+TYPOGRAPHY_MODES = ["campaign", "manual"]
 
 
 class ClientError(Exception):
@@ -78,13 +79,17 @@ def _one_node(prompt, class_type):
 
 def build_prompt(workflow_path, *, material, copy_text, language, allow_mixed_scripts,
                  style, layout, width, height, count, seed,
-                 quality_policy="return_with_warnings", ocr_mode="off"):
+                 quality_policy="return_with_warnings", ocr_mode="off", typography_mode="campaign",
+                 body_text=None):
     if quality_policy not in QUALITY_POLICIES:
         raise ClientError("INVALID_QUALITY_POLICY", "quality-policy 须为 return_with_warnings 或 strict。",
                           ["quality-policy"])
     if ocr_mode not in OCR_MODES:
         raise ClientError("INVALID_OCR_MODE", "ocr-mode 须为 off、reject 或 repair_masked。",
                           ["ocr-mode"])
+    if typography_mode not in TYPOGRAPHY_MODES:
+        raise ClientError("INVALID_TYPOGRAPHY_MODE", "typography-mode 须为 campaign 或 manual。",
+                          ["typography-mode"])
     try:
         with open(workflow_path, encoding="utf-8") as handle:
             prompt = json.load(handle)
@@ -117,8 +122,23 @@ def build_prompt(workflow_path, *, material, copy_text, language, allow_mixed_sc
         source.setdefault("inputs", {})["value"] = copy_text
     else:
         inputs["copy_text"] = copy_text
+    if body_text is None:
+        # Preserve the old complete-copy file semantics when no separate body was supplied.
+        inputs.pop("body_text", None)
+    elif not isinstance(body_text, str):
+        raise ClientError("INVALID_BODY_TEXT", "正文须为原文字符串，可留空。", ["body-file"])
+    else:
+        body_link = inputs.get("body_text")
+        if isinstance(body_link, list):
+            source = prompt.get(str(body_link[0])) if len(body_link) == 2 else None
+            if not isinstance(source, dict) or source.get("class_type") != "PrimitiveStringMultiline":
+                raise ClientError("INVALID_WORKFLOW", "正文输入必须来自 PrimitiveStringMultiline。", ["workflow"])
+            source.setdefault("inputs", {})["value"] = body_text
+        else:
+            inputs["body_text"] = body_text
     inputs.update(language=language, allow_mixed_scripts=allow_mixed_scripts,
-                  style=style, layout=layout, width=width, height=height, count=count)
+                  style=style, layout=layout, width=width, height=height, count=count,
+                  typography_mode=typography_mode)
     repeats = [node for node in prompt.values() if isinstance(node, dict)
                and node.get("class_type") == "RepeatLatentBatch"]
     if len(repeats) != 1 or repeats[0].get("inputs", {}).get("amount") != [prepare_id, 3]:
@@ -256,7 +276,8 @@ def _extract_result(record, render_id, base_url):
 def request_generation(*, base_url, material, copy_text, language="zh-Hans",
                        allow_mixed_scripts=False, style="自动", layout="auto",
                        width=1152, height=1536, count=1, seed=0, timeout=600,
-                       quality_policy="return_with_warnings", ocr_mode="off",
+                       quality_policy="return_with_warnings", ocr_mode="off", typography_mode="campaign",
+                       body_text=None,
                        workflow_path=DEFAULT_WORKFLOW, opener=None,
                        clock=time.monotonic, sleeper=time.sleep, poll_interval=0.5):
     """Return a result dict; at most one POST is made for the entire batch."""
@@ -271,7 +292,7 @@ def request_generation(*, base_url, material, copy_text, language="zh-Hans",
                                          language=language, allow_mixed_scripts=allow_mixed_scripts,
                                          style=style, layout=layout, width=width, height=height,
                                          count=count, seed=seed, quality_policy=quality_policy,
-                                         ocr_mode=ocr_mode)
+                                         ocr_mode=ocr_mode, typography_mode=typography_mode, body_text=body_text)
         opener = opener or request.urlopen
         deadline = clock() + timeout
         queue = _http_json(opener, parse.urljoin(base_url, "prompt"), deadline, clock, {"prompt": prompt})
@@ -308,6 +329,8 @@ def main(argv=None):
     parser.add_argument("--base-url", required=True, help="ComfyUI HTTP(S) 地址，不含凭据")
     parser.add_argument("--material", required=True, help="已上传到服务器的 ComfyUI 文件名；不执行上传")
     parser.add_argument("--copy-file", required=True, help="UTF-8 完整文案文件，保留 CRLF 与原文")
+    parser.add_argument("--body-file", type=Path,
+                        help="可选的UTF-8独立正文；提供时copy-file作为标题，空正文文件表示仅标题")
     parser.add_argument("--language", choices=["zh-Hans", "zh-Hant", "en"], default="zh-Hans")
     parser.add_argument("--allow-mixed-scripts", action="store_true")
     parser.add_argument("--style", choices=STYLES, default="自动")
@@ -316,6 +339,8 @@ def main(argv=None):
                         help="默认返回图片并保留校验提醒；strict 按校验结果拒收")
     parser.add_argument("--ocr-mode", choices=OCR_MODES, default="off",
                         help="默认 off：无字底图直接由真实字体排版；其余模式显式启用 OCR")
+    parser.add_argument("--typography-mode", choices=TYPOGRAPHY_MODES, default="campaign",
+                        help="campaign 先规划海报构图与大标题；manual 保留原有字号")
     parser.add_argument("--width", type=int, default=1152)
     parser.add_argument("--height", type=int, default=1536)
     parser.add_argument("--count", type=int, choices=range(1, 5), default=1)
@@ -325,6 +350,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         copy_text = read_copy_file(args.copy_file)
+        body_text = read_copy_file(args.body_file) if args.body_file is not None else None
     except ClientError as exc:
         result = failure_result(exc, args.count, None, args.language)
     else:
@@ -332,7 +358,8 @@ def main(argv=None):
                                     language=args.language, allow_mixed_scripts=args.allow_mixed_scripts,
                                     style=args.style, layout=args.layout, width=args.width,
                                     height=args.height, count=args.count, seed=args.seed, timeout=args.timeout,
-                                    quality_policy=args.quality_policy, ocr_mode=args.ocr_mode)
+                                    quality_policy=args.quality_policy, ocr_mode=args.ocr_mode,
+                                    typography_mode=args.typography_mode, body_text=body_text)
     encoded = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         try:

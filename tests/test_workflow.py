@@ -92,7 +92,8 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertEqual(self.source(self.by_type(kind), name), (load["id"], 0))
 
     def test_separate_copy_input_and_adapter_widgets_follow_real_input_contract(self):
-        copy_node = self.by_type("PrimitiveStringMultiline")
+        copy_node = self.nodes[20]
+        self.assertEqual(copy_node["type"], "PrimitiveStringMultiline")
         prepare = self.by_type("PromoTextPrepare")
         self.assertEqual(copy_node["widgets_values"], ["咖啡还是我的好"])
         self.assertEqual(self.source(prepare, "copy_text"), (copy_node["id"], 0))
@@ -114,6 +115,54 @@ class WorkflowContractTests(unittest.TestCase):
                          ["自动", "古风典雅", "现代简约", "时尚潮流", "悬疑暗调", "科技未来"])
         self.assertEqual(self.api[str(prepare["id"])]["inputs"]["width"], 1152)
         self.assertEqual(self.api[str(prepare["id"])]["inputs"]["height"], 1536)
+
+    def test_campaign_mode_and_prompts_allow_nontext_poster_design(self):
+        prepare = self.by_type("PromoTextPrepare")
+        inputs = self.api[str(prepare["id"])]["inputs"]
+        optional = adapter_contracts()["PromoTextPrepare"]["optional"]
+        self.assertEqual(list(optional)[-2:], ["typography_mode", "body_text"])
+        self.assertEqual(optional["typography_mode"][0], ["campaign", "manual"])
+        self.assertEqual(prepare["widgets_values"][-2:], ["campaign", ""])
+        self.assertEqual(inputs["typography_mode"], "campaign")
+        for term in ("商业宣传海报", "无字构图底板", "紧凑", "接触阴影", "细微纹理"):
+            self.assertIn(term, inputs["design_prompt"])
+        qwen = self.by_type("TextEncodeQwenImage21")
+        negative = self.api[str(qwen["id"])]["inputs"]["negative_prompt"]
+        self.assertEqual(qwen["widgets_values"][1], negative)
+        terms = {term.strip() for term in negative.split(",")}
+        for prohibited in ("advertising graphics", "infographic", "collage", "split layout",
+                           "frame", "promotional badge", "sticker", "button"):
+            self.assertNotIn(prohibited, terms)
+        for retained in ("text", "letters", "numbers", "new watermark", "garbled text",
+                         "deformed product"):
+            self.assertIn(retained, terms)
+        note = self.by_type("Note")["widgets_values"][0]
+        for term in ("typography_mode=campaign", "两行平衡", "无字构图底板", "manual", "强调色"):
+            self.assertIn(term, note)
+
+    def test_separate_title_and_optional_body_are_connected_without_model_copy(self):
+        prepare = self.by_type("PromoTextPrepare")
+        title, body = self.nodes[20], self.nodes[24]
+        self.assertEqual(title["widgets_values"], ["咖啡还是我的好"])
+        self.assertEqual(body["type"], "PrimitiveStringMultiline")
+        self.assertEqual(body["widgets_values"], [""])
+        self.assertIn("正文", body["title"])
+        self.assertEqual(self.source(prepare, "copy_text"), (20, 0))
+        self.assertEqual(self.source(prepare, "body_text"), (24, 0))
+        self.assertEqual(self.api["11"]["inputs"]["body_text"], ["24", 0])
+        self.assertEqual(self.api["24"]["inputs"]["value"], "")
+        descriptor = adapter_contracts()["PromoTextPrepare"]["optional"]["body_text"]
+        self.assertEqual(descriptor[0], "STRING")
+        self.assertTrue(descriptor[1]["multiline"])
+        self.assertEqual(descriptor[1]["default"], "")
+        visual = self.api["11"]["inputs"]["design_prompt"]
+        for excluded in ("标题", "正文", "字体", "排字", title["widgets_values"][0]):
+            self.assertNotIn(excluded, visual)
+        qwen = self.api[str(self.by_type("TextEncodeQwenImage21")["id"])]["inputs"]
+        self.assertEqual(qwen["prompt"], [str(prepare["id"]), 2])
+        self.assertFalse(any(value in (["20", 0], ["24", 0]) for value in qwen.values()))
+        note = self.by_type("Note")["widgets_values"][0]
+        self.assertIn("正文为空时不补写", note)
 
     def test_default_policy_skips_ocr_and_returns_images(self):
         render = self.by_type("PromoRenderAndSave")
@@ -189,7 +238,7 @@ class WorkflowContractTests(unittest.TestCase):
         for banned in ("ExactPromoTextPrepare", "DrawText+", "ImageCompositeMasked", '"SaveImage"',
                        "ailink.casa", "/Users/", "/app/", "Screenshot 2026", "nsfw", "nude", "色情"):
             self.assertNotIn(banned, serialized)
-        self.assertEqual(self.workflow["extra"]["promo_typesetter_version"], "0.1.3")
+        self.assertEqual(self.workflow["extra"]["promo_typesetter_version"], "0.1.4")
         note = self.by_type("Note")["widgets_values"][0]
         self.assertIn("python scripts/setup_ocr.py", note)
         self.assertIn("实际图像仍需逐图验收", note)

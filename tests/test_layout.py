@@ -16,6 +16,150 @@ if not FONT.is_file():
 
 
 class TransparentLayoutTests(unittest.TestCase):
+    def test_campaign_separate_title_and_body_have_large_hierarchy_and_exact_glyphs(self):
+        title, body = "咖啡还是我的好", "okok 哈喽哈喽"
+        context = self.make(title, width=1152, height=1536, title_size=112, body_size=40,
+                            typography_mode="campaign", title_text=title, body_text=body)
+        layer, manifest = layout.render_text_layer(context, Image.new("RGB", (1152, 1536), "#fff8ed"))
+        self.assertEqual(manifest["title_lines"], ["咖啡还是", "我的好"])
+        self.assertEqual(manifest["body_lines"], [body])
+        self.assertEqual(manifest["copy_text"], title + "\n" + body)
+        self.assertEqual(manifest["title_text"], title)
+        self.assertEqual(manifest["body_text"], body)
+        title_lines = [line for line in manifest["line_styles"] if line["role"] == "title"]
+        body_lines = [line for line in manifest["line_styles"] if line["role"] == "body"]
+        self.assertTrue(all(line["font_size"] >= 180 for line in title_lines))
+        self.assertEqual([line["font_size"] for line in body_lines], [40])
+        self.assertGreater(np.count_nonzero(np.asarray(layer)[:, :, 3]), 1000)
+        plan = next(p for p in context["candidate_plans"] if p["name"] == manifest["layout"])
+        last_title = [line for line in plan["lines"] if line["role"] == "title"][-1]
+        first_body = next(line for line in plan["lines"] if line["role"] == "body")
+        self.assertGreater(first_body["y"], last_title["y"] + last_title["height"])
+        self.assertNotIn(title, context["prompt"])
+        self.assertNotIn(body, context["prompt"])
+
+    def test_campaign_legacy_combined_copy_still_expands_short_title_with_body(self):
+        text = "咖啡还是我的好\r\nokok 哈喽哈喽"
+        context = self.make(text, width=1152, height=1536, title_size=112, body_size=40,
+                            typography_mode="campaign")
+        _, manifest = layout.render_text_layer(context, Image.new("RGB", (1152, 1536), "#fff8ed"))
+        self.assertEqual(manifest["copy_text"].encode(), text.encode())
+        self.assertEqual(manifest["title_lines"], ["咖啡还是", "我的好"])
+        self.assertEqual(manifest["body_lines"], ["okok 哈喽哈喽"])
+        self.assertGreaterEqual(manifest["line_styles"][0]["font_size"], 180)
+
+    def test_separate_multiline_title_and_body_keep_their_own_newlines(self):
+        title = "咖啡还是\r\n我的好"
+        body = "  原樣正文  \r\n Mixed EN：１２３ \r\n\r\n末尾  "
+        context = self.make(title, width=1152, height=1536, title_text=title, body_text=body,
+                            typography_mode="campaign", title_size=112, body_size=32, language="mixed")
+        _, manifest = layout.render_text_layer(context, Image.new("RGB", (1152, 1536), "#fff8ed"))
+        self.assertEqual(manifest["title_text"].encode(), title.encode())
+        self.assertEqual(manifest["body_text"].encode(), body.encode())
+        self.assertEqual(manifest["copy_text"], title + "\n" + body)
+        self.assertEqual(manifest["title_lines"], ["咖啡还是", "我的好"])
+        self.assertEqual(manifest["body_lines"], ["  原樣正文  ", " Mixed EN：１２３ ", "", "末尾  "])
+        self.assertEqual([line["role"] for line in manifest["line_styles"][:2]], ["title", "title"])
+        self.assertTrue(all(line["role"] == "body" for line in manifest["line_styles"][2:]))
+        self.assertTrue(all(line["font_size"] >= 112 for line in manifest["line_styles"][:2]))
+
+    def test_explicit_text_fields_work_in_manual_mode_and_empty_body_adds_no_copy(self):
+        title = "第一行\r\n第二行"
+        context = self.make(title, title_text=title, body_text="", title_size=72,
+                            first_line_title=False, typography_mode="manual")
+        _, manifest = layout.render_text_layer(context, Image.new("RGB", (1088, 1440), "#fff8ed"))
+        self.assertEqual(manifest["title_lines"], ["第一行", "第二行"])
+        self.assertEqual(manifest["body_lines"], [])
+        self.assertEqual(manifest["copy_text"], title)
+        self.assertEqual(manifest["body_text"], "")
+
+    def test_campaign_does_not_reduce_requested_font_sizes_to_fit_body(self):
+        context = self.make("咖啡还是我的好", width=1152, height=1536,
+                            typography_mode="campaign", title_text="咖啡还是我的好",
+                            body_text="正文保持完整。" * 8, title_size=111, body_size=40)
+        for plan in context["candidate_plans"]:
+            self.assertTrue(all(line.get("font_size", 111) >= 111
+                                for line in plan["lines"] if line["role"] == "title"))
+            self.assertTrue(all(line.get("font_size", 40) == 40
+                                for line in plan["lines"] if line["role"] == "body"))
+        self.error("TEXT_TOO_LONG", lambda: self.make("咖啡还是我的好", typography_mode="campaign",
+                   title_text="咖啡还是我的好", body_text="全部正文不得删减。" * 1000,
+                   title_size=112, body_size=40))
+        self.error("COPY_REQUIRED", lambda: self.make("", title_text="", body_text="正文不是标题"))
+        self.error("INVALID_BODY_TEXT", lambda: self.make(body_text=123))
+
+    def test_campaign_short_title_is_large_balanced_and_exact(self):
+        context = self.make(width=1152, height=1536, title_size=112,
+                            typography_mode="campaign")
+        layer, manifest = layout.render_text_layer(context, Image.new("RGB", (1152, 1536), "#fff8ed"))
+        self.assertEqual(manifest["typography_mode"], "campaign")
+        self.assertEqual(manifest["title_lines"], ["咖啡还是", "我的好"])
+        self.assertEqual("".join(manifest["title_lines"]), context["copy_text"])
+        self.assertGreaterEqual(manifest["line_styles"][0]["font_size"], 180)
+        self.assertGreater(layer.getbbox()[3] - layer.getbbox()[1], 350)
+        self.assertLess(layer.getbbox()[3], 1536 * .43)
+        self.assertEqual(len(manifest["line_styles"]), 2)
+        self.assertNotEqual(manifest["line_styles"][0]["color"], manifest["line_styles"][1]["color"])
+        self.assertNotIn(context["copy_text"], context["prompt"])
+        self.assertIn("无字色带", context["prompt"])
+        self.assertNotIn("画面仅包含实际主体", context["prompt"])
+
+    def test_campaign_guide_has_real_style_color_and_geometry(self):
+        guides = []
+        for style in ("古风典雅", "现代简约", "时尚潮流", "悬疑暗调", "科技未来"):
+            context = self.make(width=1152, height=1536, typography_mode="campaign", style=style)
+            guide = np.asarray(context["generation_canvas"])
+            self.assertEqual(guide.shape, (1536, 1152, 3))
+            self.assertGreater(np.std(guide.reshape(-1, 3), axis=0).max(), 2)
+            guides.append(guide.tobytes())
+        self.assertEqual(len(set(guides)), 5)
+
+    def test_campaign_keeps_the_planned_readable_composition(self):
+        context = self.make(width=1152, height=1536, typography_mode="campaign")
+        background = np.full((1536, 1152, 3), 249, dtype=np.uint8)
+        # Texture alone must not relocate a readable art-directed title.
+        background[:700:2] = 236
+        _, manifest = layout.render_text_layer(context, Image.fromarray(background))
+        self.assertEqual(manifest["layout"], context["reserved_layout"])
+        self.assertEqual(manifest["layout"], "top")
+        self.assertEqual(manifest["checks"]["contrast"], "passed")
+
+    def test_campaign_still_respects_protection_and_readability(self):
+        mask = np.zeros((1536, 1152), dtype=np.uint8)
+        mask[:730] = 255
+        context = self.make(width=1152, height=1536, typography_mode="campaign", protected_mask=mask)
+        layer, manifest = layout.render_text_layer(context, Image.new("RGB", (1152, 1536), "#fff8ed"))
+        self.assertEqual(manifest["layout"], "bottom")
+        self.assertEqual(np.asarray(layer)[:, :, 3][mask > 0].sum(), 0)
+        context = self.make(width=1152, height=1536, typography_mode="campaign", text_color="#777777")
+        background = Image.new("RGB", (1152, 1536), "white")
+        background.paste("#777777", (0, 0, 1152, 730))
+        _, manifest = layout.render_text_layer(context, background, allow_low_contrast=True)
+        self.assertEqual(manifest["layout"], "bottom")
+        self.assertEqual({line["color"] for line in manifest["line_styles"]}, {"#777777"})
+
+    def test_campaign_preserves_explicit_lines_and_words(self):
+        text = "完整标题\r\n Body  EN：１２３ \r\n\r\n末尾  "
+        context = self.make(text, typography_mode="campaign", language="mixed", title_size=44, body_size=24)
+        _, manifest = layout.render_text_layer(context, Image.new("RGB", (1088, 1440), "#fff8ed"))
+        self.assertEqual(manifest["copy_text"].encode(), text.encode())
+        self.assertEqual(manifest["title_lines"], ["完整标题"])
+        self.assertEqual(manifest["body_lines"], [" Body  EN：１２３ ", "", "末尾  "])
+        context = self.make("Fresh Coffee & Croissant", typography_mode="campaign", language="en")
+        _, manifest = layout.render_text_layer(context, Image.new("RGB", (1088, 1440), "#fff8ed"))
+        self.assertEqual("".join(manifest["title_lines"]), "Fresh Coffee & Croissant")
+        for word in ("Fresh", "Coffee", "Croissant"):
+            self.assertTrue(any(word in line for line in manifest["title_lines"]))
+
+    def test_campaign_accent_is_internal_and_explicit_text_color_wins(self):
+        context = self.make(width=1152, height=1536, typography_mode="campaign",
+                            campaign_accent=(166, 65, 28), text_color="#19232e")
+        _, manifest = layout.render_text_layer(context, Image.new("RGB", (1152, 1536), "#fff8ed"))
+        self.assertEqual(manifest["accent_color"], "#a6411c")
+        self.assertEqual({line["color"] for line in manifest["line_styles"]}, {"#19232e"})
+        self.error("INVALID_TYPOGRAPHY_MODE", lambda: self.make(typography_mode="unknown"))
+        self.error("INVALID_ACCENT", lambda: self.make(campaign_accent=(1, 2, 500)))
+
     def test_contrast_luminance_is_finite_and_matches_reference_colors(self):
         colors = np.array([[0, 0, 0], [255, 255, 255], [255, 0, 0],
                            [0, 255, 0], [0, 0, 255]], dtype=np.uint8)

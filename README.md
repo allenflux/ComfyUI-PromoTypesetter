@@ -1,18 +1,19 @@
 # ComfyUI Promo Typesetter
 
-给 Qwen 宣传图工作流增加独立文案输入、自动选择文字区域和真实字体排版。Qwen 负责素材组合、无字背景和构图，指定文案在生成完成后绘制到原画布内。**默认不运行 OCR，也不需要安装 OCR 环境。**
+给 Qwen 宣传图工作流增加独立标题、正文输入，以及商业海报构图和真实字体排版。保留图形、配色、光影与材质设计，先按指定原文规划位置，再让 Qwen 参考无字构图底板生成主视觉，最后用真实字体落字。**默认不运行 OCR，也不需要安装 OCR 环境。**
 
 ## 工作方式
 
 ```text
-宣传素材 + 视觉要求 → Qwen / KSampler 单次批量生成 1–4 张无字底图
-指定文案 → 文案与字体校验 ──────────────────────────┐
-底图 → 按留白、纹理和对比度选文字区 → 同画布透明排版 → 保存、预览 PNG
+标题 + 正文（可留空）→ 文案与字体校验 → 字号、换行与构图规划 ───────┐
+宣传素材 + 视觉要求 + 无字构图底板 → Qwen 单次批量生成 1–4 张海报底图
+底图 → 优先沿用既定文字区 → 同画布真实字体排版 → 保存、预览 PNG
 ```
 
-- 文案作为独立输入，保留原文、标点、换行和简繁字形，不生成、补写、翻译或改写。
+- 标题和正文分别输入，正文可留空，不自动生成或续写。保留原文、标点、换行和简繁字形，不翻译或改写。
 - 使用随包提供的 Noto CJK 字体，绘制前检查字符覆盖和实际文字尺寸。排不下、缺字或语言要求冲突时返回调整提示。
-- 在原尺寸画布内按留白、纹理和对比度选择文字区域，使用字体和颜色衔接画面；不在图片底部另接一块文字画布。
+- 默认 `typography_mode=campaign`：短标题可平衡成两行并放大，依据实际字框安排主体位置；无字构图底板与风格强调色共同引导整体设计。`manual` 保留指定字号。
+- 允许无字色带、曲线、刷痕等海报图形；仅禁止模型新增文字或伪字。最终文字优先沿用生成前的构图方案，使用对比度检查与主体遮罩，不在图片底部另接文字画布。
 - 支持主体保护遮罩，避免文字覆盖人物、产品和品牌关键区域。
 - 默认 `ocr_mode=off`，**有有效底图就排字、保存并返回图片**。OCR 仅作为可选高级检查；主动启用后，默认也只附复核提醒，不拦截图片。
 - 一次接收 1–4 张底图并返回逐图状态。批量出图由同一次 KSampler 执行完成，不自动循环调用单张生成。
@@ -73,14 +74,16 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
 ## 接入 Qwen 工作流
 
 1. 将真实宣传主体素材连接到 `PromoTextPrepare.material`。可再连接 `material_2`–`material_5`，并在设计要求中说明各素材用于主体、Logo 或参考。风格参考图不能替代必需的宣传主体素材；节点检查图片可读取性，不声称能自动判定图片的业务角色。
-2. 在 `copy_text` 输入完整上图文案，另外填写视觉要求、目标语言、风格和目标尺寸。
-3. 将 `generation_canvas` 作为 Qwen 的尺寸画布，将 `background_prompt` 作为视觉提示，并保留原有的宣传素材连接。图像模型应预留文字空间，禁止绘制标题、标语、按钮文字或伪文字。
+2. 新版示例中，原有 `copy_text` 输入框填写标题，新增 `body_text` 输入框填写完整正文，可留空。视觉要求只描述构图、背景、配色、光影与材质，不向 Qwen 发送标题或正文。另选目标语言、风格和目标尺寸。
+3. 将 `generation_canvas` 作为 Qwen 的无字构图与配色参考，同时决定画布尺寸；将 `background_prompt` 作为视觉提示，并保留原有的宣传素材连接。允许无字海报图形，禁止模型绘制标题、标语或伪文字。
 4. 将准备节点的 `count` 输出连接到 `RepeatLatentBatch.amount`（先把 `amount` 转为输入），从同一个数量来源设置采样批量；同一批只执行一次 KSampler。将解码后的整批图片连接到 `PromoRenderAndSave.images`。
 5. 将准备节点的 `context` 连接到排版节点的 `context`，执行一次工作流。排版节点默认继续处理每张有效底图，直接保存 PNG、返回 `result_json` 并显示图片预览，无需另接 Save Image。每张 PNG 内嵌排版清单，不另外生成 JSON 文件。
 
-示例还带有两个原生预览节点：`PreviewImage` 显示解码后的**未校验底图**，`PreviewAny` 显示最终 `result_json`，包含逐图状态、复核提醒和失败原因。最终排字节点同时预览已保存的图片。默认 `ocr_mode=off`、`quality_policy=return_with_warnings`，直接选择文字区并排字。`Prompt executed` 表示流程结束，实际出图数量应查看 `success_count` 和逐图状态。添加原生预览节点本身不需要重启后端；更新 Python 节点代码后需要重载 ComfyUI。
+示例还带有两个原生预览节点：`PreviewImage` 显示解码后的**未校验底图**，`PreviewAny` 显示最终 `result_json`，包含逐图状态、复核提醒和失败原因。最终排字节点同时预览已保存的图片。默认 `typography_mode=campaign`、`ocr_mode=off`、`quality_policy=return_with_warnings`，按预定海报构图排字并保存。`Prompt executed` 表示流程结束，实际出图数量应查看 `success_count` 和逐图状态。添加原生预览节点本身不需要重启后端；更新 Python 节点代码后需要重载 ComfyUI。
 
-指定文案不应再次拼入 Qwen 提示词。排版完成的图片直接保存，不再经过 Qwen 或扩散采样，否则字形仍可能被重画。
+旧 API 未传 `body_text` 时保持原有整段文案语义。旧 UI 刷新后，新正文控件可能默认传入显式空字符串；原来将标题与正文合在一个输入框的工作流，应把正文移到独立输入框，不能视为无需迁移。
+
+标题和正文不应再次拼入 Qwen 提示词。排版完成的图片直接保存，不再经过 Qwen 或扩散采样，否则字形仍可能被重画。
 
 ### 输入范围
 
@@ -105,7 +108,8 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
 | 参数 | 用途 |
 | --- | --- |
 | `material` | 必需的宣传主体图片；额外图片接 `material_2`–`material_5`。 |
-| `copy_text` | 完整上图文案，多行输入；第一行可作为标题。 |
+| `copy_text` | 新版示例的标题原文；由独立 node20 输入，不发送给 Qwen。旧图未提供独立正文时仍支持整段文案模式。 |
+| `body_text` | 可选的独立完整正文，由 node24 输入；空字符串表示无正文，不生成、续写或保留正文占位。 |
 | `language` | `zh-Hans` 简体中文、`zh-Hant` 繁体中文、`en` 英文。 |
 | `allow_mixed_scripts` | 允许保留简繁与英文混排；不会转换输入字符。 |
 | `design_prompt` | 只描述素材用途、构图、背景、配色等视觉要求。 |
@@ -113,10 +117,11 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
 | `layout` | `auto`、`top`、`left`、`bottom`。 |
 | `width`、`height` | 最终图片宽高，符合上方比例与长边范围。 |
 | `count` | 请求数量 1–4；通过节点输出连接到 `RepeatLatentBatch.amount`。 |
-| `first_line_title` | 是否将原文第一行按标题字号绘制。 |
-| `title_size`、`body_size` | 标题与正文字号；放不下时明确报错，不自动改写文案。 |
+| `first_line_title` | 旧整段文案模式下，是否将第一行作标题；新版独立标题、正文模式按各自字段排版。 |
+| `typography_mode` | 默认 `campaign`，根据原文规划紧凑、有分量的海报标题；`manual` 保留调用方指定字号。 |
+| `title_size`、`body_size` | 标题与正文字号；`campaign` 可为短标题上调字号并软换行，`manual` 保持指定值。全文放不下时明确报错，不删改原文。 |
 | `font_family` | `auto` 按风格选择、`sans` 无衬线、`serif` 衬线。 |
-| `text_color` | `auto` 按区域对比度选择，或填写颜色值。 |
+| `text_color` | `auto` 按区域对比度选择，`campaign` 可使用协调的逐行强调色；填写明确颜色值时统一使用该颜色。 |
 | `protected_mask` | 可选，保护主体的遮罩，须与最终画布尺寸一致。 |
 
 输出为 `generation_canvas`（IMAGE）、`context`（PROMO_CONTEXT）、`background_prompt`（STRING）、`count`（INT）。
@@ -137,7 +142,9 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
 
 ### 文字区域与遮罩
 
-支持自动选择区域，以及顶部、左侧、底部等构图方向。Qwen 提示词要求预留干净的文字空间，`auto` 再按候选区域的留白、纹理和对比度选择位置；该选择不识别人物或产品身份，需要严格保护主体时应连接 `protected_mask`。文字使用原画布内的空间，长文案不会被静默删减。区域无法容纳全文时，应缩短调用方输入、调整字号、调整文字区域或增大目标尺寸后重新提交。
+支持自动选择区域，以及顶部、左侧、底部等构图方向。默认 `campaign` 在生成前根据标题实际字框规划文字区与相邻主体位置，短标题可做两行平衡排版，避免小字上方悬空、主体沉到画面底部。无字底板的色块和曲线可作为最终设计的一部分；没有文字占位框或伪字。最终排字优先保持预定方案，仅在遮罩或可读性检查不适用时选择其他候选区。`manual` 延续按指定字号规划的方式。
+
+构图选择仍依据留白、纹理和对比度，不识别人物或产品身份，需要严格保护主体时应连接 `protected_mask`。文字使用原画布内的空间，软换行不改变原文或返回文案。全文无法放入可用区域时，应由调用方调整输入、字号、文字区域或目标尺寸后重新提交。
 
 主体保护遮罩用于保护人物、产品、Logo 等区域。默认流程不检测或清理底图文字，直接在选定区域排入指定原文。主动启用高级 OCR 检查后，允许区域之外的疑似文字会列入 `warnings`，默认保留图片并标为 `review_required`。只有选择 `repair_masked` 并明确提供 `cleanup_mask` 时才尝试在该范围内清理；清理失败时，默认仍使用原底图并附上提醒。清理范围不能侵入主体保护区域，也不自动扩大到整张图。需要保留的原品牌文字可用 `allowed_text_mask` 明确标出；它不会成为指定上图文案的来源。`strict` 策略仅在主动选择时拒收。
 
@@ -145,7 +152,7 @@ cd /path/to/ComfyUI/custom_nodes/ComfyUI-PromoTypesetter
 
 ## 结果与错误
 
-已生成图片保存为 PNG，并通过 `result_json` 返回逐图结果 JSON。每张包括图片地址、宽高、格式、实际使用文案、语言、字体及状态；待复核图片也包含这些信息。默认 OCR 状态明确记为关闭，不写成检测通过。启用高级检查后的提醒与详情同样保留在结果中。
+已生成图片保存为 PNG，并通过 `result_json` 返回逐图结果 JSON。每张包括图片地址、宽高、格式、实际使用文案、语言、字体及状态；`title_text` 与 `body_text` 分别原样保留。兼容字段 `copy_text` 在正文非空时以单个 `\n` 连接标题和正文，正文为空时仅为标题。待复核图片也包含这些信息。默认 OCR 状态明确记为关闭，不写成检测通过。启用高级检查后的提醒与详情同样保留在结果中。
 
 - `success_count`：实际保存并返回的图片数量，包含待复核图片。
 - `passed_count`：自动检查通过的图片数量。
@@ -208,3 +215,5 @@ python -m unittest discover -s tests -v
 ## 许可
 
 节点代码使用 [MIT License](LICENSE)。随包 Noto 字体使用 SIL Open Font License 1.1，见 [字体说明](fonts/README.md) 及字体目录中的许可文件。Qwen、ComfyUI、OCR 和其他第三方组件遵循各自许可。
+
+独立标题与正文的 API 客户端调用可同时指定 `--copy-file title.txt --body-file body.txt`。两份文件按 UTF-8 原样读取并保留 CRLF；空正文文件表示仅标题。未传 `--body-file` 时沿用旧完整文案文件语义。

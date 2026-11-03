@@ -111,9 +111,37 @@ class APIClientTests(unittest.TestCase):
                 self.assertEqual("input/product.png", submitted["source"]["inputs"]["image"])
                 self.assertEqual("return_with_warnings", submitted["render"]["inputs"]["quality_policy"])
                 self.assertEqual("off", submitted["render"]["inputs"]["ocr_mode"])
+                self.assertEqual("campaign", submitted["prepare"]["inputs"]["typography_mode"])
                 self.assertEqual(count, len(result["images"]))
                 self.assertTrue(all(image["url"].startswith("https://comfy.example.test/view?")
                                     for image in result["images"]))
+
+    def test_manual_typography_is_explicit_and_invalid_mode_never_submits(self):
+        http = StubHTTP(self.completed(self.success(1)))
+        self.assertEqual("success", self.run_request(http, typography_mode="manual")["status"])
+        submitted = json.loads(http.posts[0][2])["prompt"]
+        self.assertEqual("manual", submitted["prepare"]["inputs"]["typography_mode"])
+        invalid = StubHTTP()
+        result = self.run_request(invalid, typography_mode="invented")
+        self.assertEqual("INVALID_TYPOGRAPHY_MODE", result["error"]["code"])
+        self.assertEqual([], invalid.posts)
+
+    def test_separate_body_preserves_raw_fields_and_old_copy_stays_compatible(self):
+        self.prompt["body"] = {"class_type": "PrimitiveStringMultiline", "inputs": {"value": "placeholder"}}
+        self.prompt["prepare"]["inputs"]["body_text"] = ["body", 0]
+        self.workflow.write_text(json.dumps(self.prompt), encoding="utf-8")
+        title, body = "  原樣 Title  \r\n第二行", " Body\r\n繁體 EN  "
+        http = StubHTTP(self.completed(self.success(1)))
+        self.run_request(http, copy_text=title, body_text=body)
+        submitted = json.loads(http.posts[0][2])["prompt"]
+        self.assertEqual(title, submitted["copy"]["inputs"]["value"])
+        self.assertEqual(body, submitted["body"]["inputs"]["value"])
+        self.assertEqual(["body", 0], submitted["prepare"]["inputs"]["body_text"])
+        old = StubHTTP(self.completed(self.success(1)))
+        self.run_request(old, copy_text=title + "\n" + body)
+        legacy = json.loads(old.posts[0][2])["prompt"]
+        self.assertNotIn("body_text", legacy["prepare"]["inputs"])
+        self.assertEqual(title + "\n" + body, legacy["copy"]["inputs"]["value"])
 
     def test_review_images_warnings_and_counts_are_returned_without_resubmission(self):
         for count in range(1, 5):
